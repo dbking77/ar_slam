@@ -36,9 +36,9 @@ In this example 3 captures of 6 different AR tags are used to make a map.
 ```
 ./ar_slam images/img1.jpg images/img2.jpg images/img3.jpg
 ```
-![First image capture used to generate map](images/img1.jpg)
-![Second image capture used to generate map](images/img2.jpg)
-![Third image capture used to generate map](images/img3.jpg)
+![First image capture used to generate map](images/img1.jpg | width=600)
+![Second image capture used to generate map](images/img2.jpg | width=600)
+![Third image capture used to generate map](images/img3.jpg | width=600)
 
 
 Then a forth image is localized against the map.  The forth image is modified so AR-tag is partially occluded so it is not dectected.
@@ -47,8 +47,8 @@ The second screen shows results after optimization.
 ```
 ./ar_loc map.yaml image.jpg
 ```
-![Debugging output showing annotated positions pre-optimization](images/img4_annotated_pre_optimize.jpg)
-![Debugging output showing annotated positions post-optimization](images/img4_annotated_post_optimize.jpg)
+![Debugging output showing annotated positions pre-optimization](images/img4_annotated_pre_optimize.jpg | width=600)
+![Debugging output showing annotated positions post-optimization](images/img4_annotated_post_optimize.jpg | width=600)
 
 When localizing the debug display shows an image showing where the tags are detected and map tags are projected.
 Tags that were not detected will be outlined in yellow.
