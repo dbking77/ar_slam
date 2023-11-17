@@ -16,7 +16,7 @@ The Aruco dictionary that is used should produce 50 unique tags that are placed 
 ```
 ./ar_gen
 ```
-### SLAM
+### Generate Map
 Compute a map from from a bunch of images of AR tags from different angles.
 At least two AR tags should be visible in a single image.
 Capture should have overlapping tags produce a connected graph of captures and AR tags.
@@ -33,7 +33,7 @@ With a known map a different capture can be localized aganist the existing map.
 
 ## Example
 
-### SLAM
+### Generate Map
 In this example 3 captures of 6 different AR tags are used to make a map.
 
 ```
@@ -43,7 +43,7 @@ In this example 3 captures of 6 different AR tags are used to make a map.
 <img src="images/img2.jpg" width="600">
 <img src="images/img4.jpg" width="600">
 
-### Localized
+### Localize
 Then a forth image is localized against the map.  The forth image is modified so AR-tag is partially occluded so it is not dectected.
 For each capture two debug screens are shown.  The first shows the projected outlines before optimization is performed.
 The second screen shows results after optimization.
