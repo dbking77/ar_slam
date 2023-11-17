@@ -1,11 +1,11 @@
 ## About
-This is a simple project that localizes capture device (camera), Aruco tags in 3D, and camera params (focal length) using multiple image captures.
-All captures are assumed to by made with same camera, and all Aruco tags are assumed to be the same size.
+This is a simple project that using multiple image captures to compute relavent AR tag poses camera parameters.
+All captures are assumed to by made with same camera, and all AR-tags are assumed to be the same size.
 
-Once capture parameters knowns and saved into a map, any new capture can be localized (more quickly) against that map.
+Once capture parameters knowns and saved into a map, any new capture can be localized against that map.
 A saved map can also be updated or extended with more captures.
 
-Currently there is only 2D debug visualization of results using OpenCV.
+Currently there is only basic 2D visualization of results.
 
 ## Usage
 
@@ -44,12 +44,13 @@ In this example 3 captures of 6 different AR tags are used to make a map.
 <img src="images/img4.jpg" width="600">
 
 ### Localize
-Then a forth image is localized against the map.  The forth image is modified so AR-tag is partially occluded so it is not dectected.
+A forth image is localized against the map.  The forth image is modified so AR-tag is partially occluded so it is not dectected.
+```
+./ar_loc map.yaml images/img4.jpg
+```
+
 For each capture two debug screens are shown.  The first shows the projected outlines before optimization is performed.
 The second screen shows results after optimization.
-```
-./ar_loc map.yaml image.jpg
-```
 
 Debugging output showing annotated positions pre-optimization
 <img src="images/img4_annotated_pre_optimize.jpg" width="600">
