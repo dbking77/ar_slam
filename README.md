@@ -9,13 +9,14 @@ Currently there is only 2D debug visualization of results using OpenCV.
 
 ## Usage
 
+### Generate AR tags
 Generate multiple PNG files Aruco tags arranged to be printed as 8.5x11 pages.
 The images can be imported into a google doc and then be printe out with 100% scaling.
 The Aruco dictionary that is used should produce 50 unique tags that are placed in a 2x3 grid on 9 images.
 ```
 ./ar_gen
 ```
-
+### SLAM
 Compute a map from from a bunch of images of AR tags from different angles.
 At least two AR tags should be visible in a single image.
 Capture should have overlapping tags produce a connected graph of captures and AR tags.
@@ -24,6 +25,7 @@ The tool will automatically produce the output map.yaml
 ./ar_slam image*.jpg
 ```
 
+### Localize
 With a known map a different capture can be localized aganist the existing map.
 ```
 ./ar_loc map.yaml image.jpg
@@ -31,6 +33,7 @@ With a known map a different capture can be localized aganist the existing map.
 
 ## Example
 
+### SLAM
 In this example 3 captures of 6 different AR tags are used to make a map.
 
 ```
@@ -40,7 +43,7 @@ In this example 3 captures of 6 different AR tags are used to make a map.
 <img src="images/img2.jpg" width="600">
 <img src="images/img4.jpg" width="600">
 
-
+### Localized
 Then a forth image is localized against the map.  The forth image is modified so AR-tag is partially occluded so it is not dectected.
 For each capture two debug screens are shown.  The first shows the projected outlines before optimization is performed.
 The second screen shows results after optimization.
@@ -78,5 +81,3 @@ Then build with make
 ```
 make
 ```
-
-##
