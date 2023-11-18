@@ -25,17 +25,16 @@ SOFTWARE.
 #include <string>
 #include <vector>
 
-#include "ar_slam_util.hpp"
+#include "ar_slam/ar_slam_util.hpp"
 
 #include "glog/logging.h"
 
 
-int main(int argc, char** argv)
+int main(int argc, char ** argv)
 {
   google::InitGoogleLogging(argv[0]);
 
-  if (argc < 2)
-  {
+  if (argc < 2) {
     std::cerr << "Need to provide a .yaml or list of *.jpg for processing" << std::endl;
     std::cerr <<
       "Usage:  slam [fn1.yaml] [fn2.jpg] [fn3.jpg] ..."
@@ -58,15 +57,11 @@ int main(int argc, char** argv)
 
   ArSlamSolver solver;
   std::vector<std::string> img_fns;
-  for (int ii = 1; ii<argc; ++ii)
-  {
+  for (int ii = 1; ii < argc; ++ii) {
     std::string fn = argv[ii];
-    if (endswith(fn, ".yaml"))
-    {
+    if (endswith(fn, ".yaml")) {
       solver.loadYaml(fn);
-    }
-    else
-    {
+    } else {
       img_fns.emplace_back(argv[ii]);
     }
   }

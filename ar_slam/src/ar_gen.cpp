@@ -35,7 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 int main()
 {
   cv::namedWindow("Image");
-  usleep(50*1000);
+  usleep(50 * 1000);
 
   // 8.5 x 11
   // margin of 1.0 = 6.5 x 9
@@ -59,7 +59,8 @@ int main()
 
   const int max_ar_idx = 50;
   // cv::aruco::DICT_6X6_250
-  cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50);
+  cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(
+    cv::aruco::DICT_4X4_50);
 
   const int xcnt = 2;
   const int ycnt = 3;
@@ -69,30 +70,27 @@ int main()
 
   int ar_idx = 0;
   int page_idx = 0;
-  while (ar_idx < max_ar_idx)
-  {
+  while (ar_idx < max_ar_idx) {
     cv::Mat img(h, w, CV_8UC1, cv::Scalar(255));
 
-    for (int xi=0; xi < xcnt; ++xi)
-    {
-      for (int yi=0; yi < ycnt; ++yi)
-      {
-        if (ar_idx >= max_ar_idx)
-        {
+    for (int xi = 0; xi < xcnt; ++xi) {
+      for (int yi = 0; yi < ycnt; ++yi) {
+        if (ar_idx >= max_ar_idx) {
           break;
         }
 
-        float xoff = float(xi - 0.5f*(xcnt-1)) * (ar_size + pad);
-        float yoff = float(yi - 0.5f*(ycnt-1)) * (ar_size + pad);
-        int xcorner = (xcenter - 0.5*ar_size + xoff);
-        int ycorner = (ycenter - 0.5*ar_size + yoff);
+        float xoff = float(xi - 0.5f * (xcnt - 1)) * (ar_size + pad);
+        float yoff = float(yi - 0.5f * (ycnt - 1)) * (ar_size + pad);
+        int xcorner = (xcenter - 0.5 * ar_size + xoff);
+        int ycorner = (ycenter - 0.5 * ar_size + yoff);
 
         cv::Rect roi(xcorner, ycorner, ar_size, ar_size);
         cv::Mat slice = img(roi);
         cv::aruco::drawMarker(dictionary, ar_idx, ar_size, slice, 1);
-        cv::putText(img, std::to_string(ar_idx),
-                    cv::Point(xcorner+50, ycorner-15),
-                    cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(100), 1);
+        cv::putText(
+          img, std::to_string(ar_idx),
+          cv::Point(xcorner + 50, ycorner - 15),
+          cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(100), 1);
         ++ar_idx;
       }
     }
