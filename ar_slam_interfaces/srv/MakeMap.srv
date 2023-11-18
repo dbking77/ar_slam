@@ -1,0 +1,7 @@
+# list of image filenames to load
+string[] img_fns
+
+---
+
+# yaml formated map information
+string map

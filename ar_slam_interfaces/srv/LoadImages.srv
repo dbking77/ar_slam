@@ -1,0 +1,8 @@
+# list of image filenames to load
+string[] img_fns
+
+---
+
+# Result
+bool success
+string msg

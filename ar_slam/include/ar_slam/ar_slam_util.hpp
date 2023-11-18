@@ -39,11 +39,14 @@ SOFTWARE.
 #include "ceres/ceres.h"
 #include "ceres/rotation.h"
 
+// ROS2 Interfaces
+#include "ar_slam_interfaces/msg/detections.hpp"
 
 struct Point
 {
   Point() = default;
-  Point(double _x, double _y) : x{_x}, y{_y} {}
+  Point(double _x, double _y)
+  : x{_x}, y{_y} {}
   double x = 0.0;
   double y = 0.0;
 };
@@ -83,7 +86,8 @@ struct PoseParams
 /// Represents a single capture from a camera
 struct Capture
 {
-  Capture(std::string _fn, unsigned _idx) : img_fn{std::move(_fn)}, idx{_idx} { }
+  Capture(std::string _fn, unsigned _idx)
+  : img_fn{std::move(_fn)}, idx{_idx} {}
   std::string img_fn;
   cv::Mat img;
   unsigned idx = 0;
@@ -97,16 +101,14 @@ struct Capture
    */
   PoseParams inv_pose;
 
-  double* data() {return inv_pose.params.data();}
-  const double* data() const {return inv_pose.params.data();}
+  double * data() {return inv_pose.params.data();}
+  const double * data() const {return inv_pose.params.data();}
 
   cv::Mat loadImg()
   {
-    if (img.empty())
-    {
+    if (img.empty()) {
       img = cv::imread(img_fn);
-      if (img.empty())
-      {
+      if (img.empty()) {
         std::ostringstream ss;
         ss << "error loading image " << img_fn;
         throw std::runtime_error(ss.str());
@@ -120,14 +122,15 @@ struct Capture
 /// Represents a unique AR tag
 struct Aruco
 {
-  Aruco(unsigned _id) : id{_id} { }
+  Aruco(unsigned _id)
+  : id{_id} {}
   unsigned id = 0;
   bool initialized = false;
   std::vector<unsigned> cap_idxs;
   std::vector<unsigned> block_idxs;
   PoseParams pose;
-  double* data() {return pose.params.data();}
-  const double* data() const {return pose.params.data();}
+  double * data() {return pose.params.data();}
+  const double * data() const {return pose.params.data();}
 };
 
 
@@ -137,18 +140,17 @@ struct Aruco
  * OpenCV uses for images where y-axis increased downward and top-left is corner is 0,0
  * Also optionally scale down coordinates to scaled image
  */
-inline cv::Point to_cv_img(double x, double y, const cv::Size& scaled_img_size, float scale=1.0)
+inline cv::Point to_cv_img(double x, double y, const cv::Size & scaled_img_size, float scale = 1.0)
 {
   const float xc = 0.5 * scaled_img_size.width;
   const float yc = 0.5 * scaled_img_size.height;
-  return cv::Point((scale*x + xc), (-scale*y + yc));
+  return cv::Point((scale * x + xc), (-scale * y + yc));
 }
 
 
-inline Point from_cv_img(const cv::Point2f& point, const cv::Size& img_size)
+inline Point from_cv_img(const cv::Point2f & point, const cv::Size & img_size)
 {
-  return Point
-  {
+  return Point {
     +(point.x - 0.5 * img_size.width),
     -(point.y - 0.5 * img_size.height)
   };
@@ -163,15 +165,21 @@ struct ArucoRect
    * Create rectangle from OpenCV ar_tag dectection.
    * Note conversion from OpenCV coordinate system to one used here
    */
-  ArucoRect(const std::vector<cv::Point2f>& ar_detect, cv::Size img_size)
+  ArucoRect(const std::vector<cv::Point2f> & ar_detect, cv::Size img_size)
   {
-    if (ar_detect.size() != corners.size())
-    {
+    if (ar_detect.size() != corners.size()) {
       throw std::runtime_error("incorrect number of points");
     }
-    for (unsigned idx = 0; idx < corners.size(); ++idx)
-    {
+    for (unsigned idx = 0; idx < corners.size(); ++idx) {
       corners[idx] = from_cv_img(ar_detect[idx], img_size);
+    }
+  }
+
+  ArucoRect(const ar_slam_interfaces::msg::Detection & detection)
+  {
+    for (unsigned idx = 0; idx < corners.size(); ++idx) {
+      corners[idx].x = detection.corners[idx].x;
+      corners[idx].y = detection.corners[idx].y;
     }
   }
 
@@ -181,11 +189,12 @@ struct ArucoRect
 
 struct Block
 {
-  Block(unsigned _block_idx,
-        ArucoRect& _aruco_rect,
-        Capture& _capture,
-        Aruco& _aruco) :
-    block_idx{_block_idx},
+  Block(
+    unsigned _block_idx,
+    const ArucoRect & _aruco_rect,
+    Capture & _capture,
+    Aruco & _aruco)
+  : block_idx{_block_idx},
     aruco_rect{_aruco_rect},
     capture{_capture},
     aruco{_aruco}
@@ -203,8 +212,8 @@ struct Block
 
   unsigned block_idx = 0;
   ArucoRect aruco_rect;
-  Capture& capture;
-  Aruco& aruco;
+  Capture & capture;
+  Aruco & aruco;
   bool added = false;
 };
 
@@ -219,23 +228,29 @@ static constexpr double aruco_size = 0.0635;
  * -x,+y,  +x,+y, +x,-y, -x,-y
  */
 static const std::array<Point, 4> ARUCO_DIRECTIONS = {
-    Point{-1,+1},
-    Point{+1,+1},
-    Point{+1,-1},
-    Point{-1,-1}
+  Point{-1, +1},
+  Point{+1, +1},
+  Point{+1, -1},
+  Point{-1, -1}
 };
-
 
 inline double normalize_angle(double angle)
 {
-  return std::fmod(std::fmod(angle, 2*M_PI) + 3*M_PI, 2*M_PI) - M_PI;
+  return std::fmod(std::fmod(angle, 2 * M_PI) + 3 * M_PI, 2 * M_PI) - M_PI;
 }
 
 
-inline bool endswith(const std::string& str, const std::string& suffix)
-{
-  return (str.size() >= suffix.size()) and (str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0);
-}
+bool endswith(const std::string & str, const std::string & suffix);
+
+/**
+ * Take file path and returns just files basename with no extension
+ *   file.jpg          -> file
+ *   /path/to/file.jpg -> file
+ *   ../../file.jpg    -> file
+ *   ../file           -> file
+ *   ../file.1.jpg     -> file.1
+ */
+std::string filename_no_ext(std::string filepath);
 
 
 class ArSlamSolver
@@ -243,13 +258,13 @@ class ArSlamSolver
 public:
   ArSlamSolver() = default;
 
-  void loadImages(const std::vector<std::string>& img_fns);
+  void loadImages(const std::vector<std::string> & img_fns);
 
-  void loadYaml(const std::string& fn);
+  void loadYaml(const std::string & fn);
 
-  void saveYaml(std::ostream& output) const;
+  void saveYaml(std::ostream & output) const;
 
-  void displayDebug(const Capture& capture);
+  void displayDebug(const Capture & capture);
 
   void printCameras() const;
 
@@ -257,14 +272,23 @@ public:
 
   void solve();
 
+  void solveIncremental();
+
   unsigned getNextCaptureIndex() const;
 
   void localize(unsigned first_loc_cap_idx);
 
-protected:
-  void addConnectedCaptures(const Capture& base_capture, std::deque<unsigned>& open_captures);
+  void addDetections(const ar_slam_interfaces::msg::Detections & detections);
 
-  void optimize(const Capture& capture);
+  bool & display_debug() {return display_debug_;}
+  double & display_wait_duration() {return display_wait_duration_;}
+
+protected:
+  void addConnectedCaptures(const Capture & base_capture, std::deque<unsigned> & open_captures);
+
+  void solveCapture(Capture & capture, std::optional<unsigned> init_block_idx);
+
+  void optimize(const Capture & capture);
 
   void resetProblem();
 
@@ -274,15 +298,26 @@ protected:
 
   CameraParams camera_;
 
+  // Data store
   std::deque<Capture> captures_;
   std::deque<Aruco> arucos_;
   std::deque<Block> blocks_;
 
-  std::unordered_map<unsigned, Capture&> capture_map_;
-  std::unordered_map<unsigned, Aruco&> aruco_map_;
+  // Capture index and ar_tags ID might not start from 0
+  // have a lookup from ar_id and cap_idx into array index in data store
+  std::unordered_map<unsigned, Capture &> capture_map_;
+  std::unordered_map<unsigned, Aruco &> aruco_map_;
+
+  /**
+   * When solving incremental it is not always possible to solve a new
+   * capture if it is not connected to the rest of captures through a common
+   * ar tag.
+   */
+  std::unordered_set<unsigned> unsolved_captures_;
 
   bool display_debug_ = true;
   bool display_debug_show_all_ar_ = false;
+  double display_wait_duration_ = 0.0;
 };
 
 
