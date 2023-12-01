@@ -31,7 +31,6 @@ SOFTWARE.
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
 #include "ar_slam_interfaces/msg/capture.hpp"
-//#include "sensor_msgs/msg/image.hpp"
 
 // ROS2 Other
 #include "cv_bridge/cv_bridge.hpp"
@@ -97,7 +96,7 @@ public:
     rclcpp::QoS qos(10);
     using std::placeholders::_1;
     subscription_ = this->create_subscription<ar_slam_interfaces::msg::Capture>(
-      "images", qos, std::bind(&ArucoDetector::image_callback, this, _1), sub_options);
+      "captures", qos, std::bind(&ArucoDetector::image_callback, this, _1), sub_options);
 
     publisher_ = this->create_publisher<ar_slam_interfaces::msg::Detections>("detections", 10);
   }

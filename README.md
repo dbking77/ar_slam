@@ -1,4 +1,4 @@
-x## About
+## About
 This project uses multiple image captures to compute relevant camera parameters and AR tags poses.
 All captures are assumed to by made with the same camera, and all AR tags are assumed to be the same size.
 
@@ -122,5 +122,5 @@ sudo apt install -y libceres-dev
 ```
 
 ```
-colcon build --packages-select ar_slam_interface ar_slam --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+colcon build --packages-select ar_slam_interfaces ar_slam --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```

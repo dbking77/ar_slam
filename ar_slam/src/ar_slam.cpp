@@ -35,9 +35,14 @@ SOFTWARE.
 
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 // Components
 #include <rclcpp_components/register_node_macro.hpp>
+
+// TF2
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_ros/transform_broadcaster.h"
 
 namespace ar_slam
 {
@@ -84,6 +89,8 @@ public:
     using std::placeholders::_1;
     subscription_ = this->create_subscription<ar_slam_interfaces::msg::Detections>(
       "merged_detections", qos, std::bind(&ArSlam::detection_callback, this, _1), sub_options);
+
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
   }
 
   ~ArSlam()
@@ -108,10 +115,13 @@ protected:
       solver_.addDetections(*detections);
     }
     solver_.solveIncremental();
+
+    tf_broadcaster_->sendTransform(solver_.getTransforms(this->get_clock()->now()));
   }
 
   rclcpp::CallbackGroup::SharedPtr callback_group_;
   rclcpp::Subscription<ar_slam_interfaces::msg::Detections>::SharedPtr subscription_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   ArSlamSolver solver_;
 

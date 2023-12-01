@@ -35,9 +35,6 @@ SOFTWARE.
 #include "opencv2/opencv.hpp"
 #include "opencv2/aruco.hpp"
 
-// Yaml
-#include "yaml-cpp/yaml.h"
-
 void composeAxisAngle(const double * rot1, const double * rot2, double * out)
 {
   double q1[4];
@@ -272,26 +269,16 @@ void ArSlamSolver::loadImages(const std::vector<std::string> & img_fns)
       std::cout << "Warning not enough AR tags detected in " << img_fn << std::endl;
     }
 
-    unsigned cap_idx = captures_.size();
-    captures_.emplace_back(img_fn, cap_idx);
-    Capture & capture = captures_.back();
-
-    capture_map_.try_emplace(cap_idx, capture);
+    // make up a Uid for capture that isn't the same as the index
+    CaptureUid cap_uid(captures_.size() + 100);
+    Capture & capture = addCapture(cap_uid, img_fn);
+    capture.img = img;
 
     for (unsigned ii = 0; ii < ids.size(); ++ii) {
-      unsigned ar_id = ids[ii];
-      auto aruco_itr = aruco_map_.find(ar_id);
-      if (aruco_itr == aruco_map_.end()) {
-        std::cout << "Creating new ar param block for id " << ar_id << std::endl;
-        arucos_.emplace_back(ar_id);
-        bool added;
-        std::tie(aruco_itr, added) = aruco_map_.try_emplace(ar_id, arucos_.back());
-      }
-      auto & aruco = aruco_itr->second;
-      capture.img = img;
-
+      ArucoId ar_id(ids[ii]);
+      Aruco & aruco = getOrAddAruco(ar_id);
       ArucoRect aruco_rect(rects.at(ii), img.size());
-      blocks_.emplace_back(blocks_.size(), aruco_rect, capture, aruco);
+      addBlock(aruco_rect, capture.handle, aruco.handle);
     }
   }
 }
@@ -301,7 +288,7 @@ unsigned ArSlamSolver::getNextCaptureIndex() const
 {
   unsigned next_cap_idx = 0;
   for (const Capture & capture : captures_) {
-    next_cap_idx = std::max(next_cap_idx, capture.idx + 1);
+    next_cap_idx = std::max(next_cap_idx, capture.handle.idx + 1);
   }
   return next_cap_idx;
 }
@@ -316,12 +303,10 @@ void ArSlamSolver::loadYaml(const std::string & fn)
 
   YAML::Node captures = doc["captures"];
   for (auto cap_itr : captures) {
-    unsigned cap_idx = cap_itr.first.as<int>() + cap_idx_offset;
+    CaptureUid cap_uid(cap_itr.first.as<int>() + cap_idx_offset);
     YAML::Node cap_data = cap_itr.second;
     std::string img_fn = cap_data["img_fn"].as<std::string>();
-    captures_.emplace_back(img_fn, cap_idx);
-    Capture & capture = captures_.back();
-    capture_map_.try_emplace(cap_idx, capture);
+    Capture & capture = addCapture(cap_uid, img_fn);
     YAML::Node inv_pose_data = cap_data["inv_pose"];
     for (size_t ii = 0; ii < capture.inv_pose.params.size(); ++ii) {
       capture.inv_pose.params[ii] = inv_pose_data[ii].as<double>();
@@ -330,11 +315,8 @@ void ArSlamSolver::loadYaml(const std::string & fn)
 
   YAML::Node arucos = doc["arucos"];
   for (auto ar_itr : arucos) {
-    unsigned ar_id = ar_itr.first.as<int>();
-    arucos_.emplace_back(ar_id);
-    Aruco & aruco = arucos_.back();
-    aruco_map_.try_emplace(ar_id, aruco);
-
+    ArucoId ar_id(ar_itr.first.as<int>());
+    Aruco & aruco = addAruco(ar_id);
     YAML::Node ar_data = ar_itr.second;
     YAML::Node pose_data = ar_data["pose"];
     for (size_t ii = 0; ii < aruco.pose.params.size(); ++ii) {
@@ -344,19 +326,12 @@ void ArSlamSolver::loadYaml(const std::string & fn)
 
   YAML::Node blocks = doc["blocks"];
   for (auto block_data : blocks) {
-    unsigned cap_idx = block_data["capture"].as<int>() + cap_idx_offset;
-    auto cap_itr = capture_map_.find(cap_idx);
-    if (cap_itr == capture_map_.end()) {
-      throw std::runtime_error("capture idx does not exist");
-    }
-    Capture & capture = cap_itr->second;
+    CaptureUid cap_uid(block_data["capture"].as<int>() + cap_idx_offset);
 
-    unsigned ar_id = block_data["aruco"].as<int>();
-    auto ar_itr = aruco_map_.find(ar_id);
-    if (ar_itr == aruco_map_.end()) {
-      throw std::runtime_error("ar id does not exist");
-    }
-    Aruco & aruco = ar_itr->second;
+    CaptureHandle cap_handle = capture_map_.at(cap_uid);
+
+    ArucoId ar_id(block_data["aruco"].as<int>());
+    ArucoHandle & ar_handle = aruco_map_.at(ar_id);
 
     YAML::Node rect_data = block_data["aruco_rect"];
     ArucoRect aruco_rect;
@@ -367,7 +342,7 @@ void ArSlamSolver::loadYaml(const std::string & fn)
       aruco_rect.corners[ii].x = rect_data[2 * ii + 0].as<double>();
       aruco_rect.corners[ii].y = rect_data[2 * ii + 1].as<double>();
     }
-    blocks_.emplace_back(blocks_.size(), aruco_rect, capture, aruco);
+    addBlock(aruco_rect, cap_handle, ar_handle);
   }
 
   {
@@ -395,15 +370,15 @@ void ArSlamSolver::saveYaml(std::ostream & output) const
     y << YAML::BeginSeq;
     for (const Block & block : blocks_) {
       y << YAML::BeginMap;
-      y << YAML::Key << "capture" << YAML::Value << block.capture.idx;
-      y << YAML::Key << "aruco" << YAML::Value << block.aruco.id;
+      //y << YAML::Key << "capture" << YAML::Value << at(block.capture).uid.uid;
+      y << YAML::Key << "capture" << YAML::Value << at(block.capture).uid;
+      y << YAML::Key << "aruco" << YAML::Value << at(block.aruco).id;
       y << YAML::Key << "aruco_rect" << YAML::Value << YAML::Flow << YAML::BeginSeq;
       for (const Point & point : block.aruco_rect.corners) {
         y << point.x << point.y;
       }
       y << YAML::EndSeq;
       y << YAML::EndMap;
-
     }
     y << YAML::EndSeq;
   }
@@ -413,7 +388,7 @@ void ArSlamSolver::saveYaml(std::ostream & output) const
   {
     y << YAML::BeginMap;
     for (const Capture & capture : captures_) {
-      y << YAML::Key << capture.idx << YAML::Value << YAML::BeginMap;
+      y << YAML::Key << capture.uid.uid << YAML::Value << YAML::BeginMap;
       {
         // params
         y << YAML::Key << "inv_pose" << YAML::Value << YAML::Flow << YAML::BeginSeq;
@@ -525,19 +500,21 @@ void ArSlamSolver::displayDebug(const Capture & capture)
       center_y *= 0.25;
 
       cv::putText(
-        scaled_img, std::to_string(aruco.id),
+        scaled_img, std::to_string(aruco.id.id),
         cv::Point(center_x, center_y),
         cv::FONT_HERSHEY_DUPLEX, 0.5,
         color, 1);
     };
 
 
-  std::unordered_set<unsigned> detected_ar_ids;
-  detected_ar_ids.reserve(capture.block_idxs.size());
+  std::unordered_set<ArucoId> detected_ar_ids;
+  detected_ar_ids.reserve(capture.blocks.size());
 
-  for (unsigned block_idx : capture.block_idxs) {
-    const Block & block = blocks_.at(block_idx);
-    detected_ar_ids.insert(block.aruco.id);
+  for (BlockHandle block_handle : capture.blocks) {
+    const Block & block = at(block_handle);
+    const Aruco & aruco = at(block.aruco);
+    const Capture & capture = at(block.capture);
+    detected_ar_ids.insert(aruco.id);
     double center_x = 0.0;
     double center_y = 0.0;
     for (unsigned ii = 0; ii < 4; ++ii) {
@@ -554,12 +531,12 @@ void ArSlamSolver::displayDebug(const Capture & capture)
     center_x *= 0.25;
     center_y *= 0.25;
     cv::putText(
-      scaled_img, std::to_string(block.aruco.id),
+      scaled_img, std::to_string(aruco.id.id),
       cv::Point(center_x, center_y),
       cv::FONT_HERSHEY_DUPLEX, 0.5,
       cv::Scalar(200, 0, 200), 1);
 
-    draw_projected_aruco(block.aruco, block.capture, cv::Scalar(250, 250, 0));
+    draw_projected_aruco(aruco, capture, cv::Scalar(250, 250, 0));
   }
 
   // When show-all it true, try project all (un-detected) aruco tags onto
@@ -596,8 +573,8 @@ void ArSlamSolver::compareProjections() const
       compareProjection(
         block.aruco_rect,
         camera_.params.data(),
-        block.capture.data(),
-        block.aruco.data());
+        at(block.capture).data(),
+        at(block.aruco).data());
     }
   }
 }
@@ -622,27 +599,17 @@ void ArSlamSolver::addDetections(const ar_slam_interfaces::msg::Detections & det
   }
 
   // Create new capture for detection
-  unsigned cap_idx = captures_.size();
-  captures_.emplace_back(detections.capture_uid, cap_idx);
-  Capture & capture = captures_.back();
-  capture.img_fn = detections.image_path;
-  capture_map_.try_emplace(cap_idx, capture);
+  const unsigned capture_uid_offset = 1000;
+  CaptureUid cap_uid(captures_.size() + capture_uid_offset);
+  Capture & capture = addCapture(cap_uid, detections.image_path);
 
   for (const auto & detection : detections.detections) {
-    unsigned ar_id = detection.id;
-    auto aruco_itr = aruco_map_.find(ar_id);
-    if (aruco_itr == aruco_map_.end()) {
-      std::cout << "Creating new ar param block for id " << ar_id << std::endl;
-      arucos_.emplace_back(ar_id);
-      bool added;
-      std::tie(aruco_itr, added) = aruco_map_.try_emplace(ar_id, arucos_.back());
-    }
-    auto & aruco = aruco_itr->second;
-
-    blocks_.emplace_back(blocks_.size(), ArucoRect{detection}, capture, aruco);
+    ArucoId ar_id(detection.id);
+    Aruco & aruco = getOrAddAruco(ar_id);
+    addBlock(ArucoRect{detection}, capture.handle, aruco.handle);
   }
 
-  unsolved_captures_.insert(cap_idx);
+  unsolved_captures_.insert(capture.handle);
 }
 
 void ArSlamSolver::solveIncremental()
@@ -659,10 +626,10 @@ void ArSlamSolver::solveIncremental()
 
   // make sure at least one capture is solved
   if (unsolved_captures_.size() == captures_.size()) {
-    std::cout << "Solving initial capture" << std::endl;
-    unsigned cap_idx = *unsolved_captures_.begin();
-    unsolved_captures_.erase(cap_idx);
-    Capture & capture = capture_map_.at(cap_idx);
+    CaptureHandle cap_handle = *unsolved_captures_.begin();
+    std::cout << "Solving initial capture " << cap_handle.idx << std::endl;
+    unsolved_captures_.erase(cap_handle);
+    Capture & capture = at(cap_handle);
     solveCapture(capture, std::nullopt);
   }
 
@@ -674,18 +641,18 @@ void ArSlamSolver::solveIncremental()
     repeat_solve = false;
     //for (unsigned cap_idx : unsolved_captures_)
     for (auto itr = unsolved_captures_.begin(); itr != unsolved_captures_.end(); ++itr) {
-      unsigned cap_idx = *itr;
-      Capture & capture = capture_map_.at(cap_idx);
+      Capture & capture = at(*itr);
       // see if any aruco detected in capture is connected
       //for (unsigned ar_id : capture.ar_ids)
-      for (unsigned block_idx : capture.block_idxs) {
-        Block & block = blocks_.at(block_idx);
-        Aruco & aruco = block.aruco;
+      for (BlockHandle block_handle : capture.blocks) {
+        Block & block = at(block_handle);
+        Aruco & aruco = at(block.aruco);
         if (aruco.initialized) {
-          std::cout << "Capture " << cap_idx << " can be solved through " << aruco.id << std::endl;
+          std::cout << "Capture " << capture.uid << " can be solved through " << aruco.id <<
+            std::endl;
           repeat_solve = true;
           itr = unsolved_captures_.erase(itr);
-          solveCapture(capture, block_idx);
+          solveCapture(capture, block_handle);
           break;
         }
       }
@@ -696,26 +663,27 @@ void ArSlamSolver::solveIncremental()
   } while (repeat_solve);
 }
 
-void ArSlamSolver::solveCapture(Capture & capture, std::optional<unsigned> init_block_idx)
+void ArSlamSolver::solveCapture(Capture & capture, std::optional<BlockHandle> init_block_handle)
 {
   // Initialize capture pose using connected block
-  if (init_block_idx.has_value()) {
-    const Block & block = blocks_.at(init_block_idx.value());
-    std::cout << "Initializing capture " << capture.idx
-              << " using block " << init_block_idx.value()
-              << " and ar id " << block.aruco.id << std::endl;
+  if (init_block_handle.has_value()) {
+    const Block & block = at(init_block_handle.value());
+    const Aruco & aruco = at(block.aruco);
+    std::cout << "Initializing capture " << capture.uid
+              << " using block " << init_block_handle.value().idx
+              << " and ar id " << aruco.id << std::endl;
     initCapturePose(
       block.aruco_rect,
       camera_.params.data(),
-      block.aruco.data(),
+      aruco.data(),
       capture.data());
   }
 
   // Add all blocks for capture to problem
-  for (unsigned block_idx : capture.block_idxs) {
-    std::cerr << "block " << block_idx << " of " << blocks_.size() << std::endl;
-    Block & block = blocks_.at(block_idx);
-    Aruco & aruco = block.aruco;
+  for (BlockHandle block_handle : capture.blocks) {
+    std::cerr << "block " << block_handle.idx << " of " << blocks_.size() << std::endl;
+    Block & block = at(block_handle);
+    Aruco & aruco = at(block.aruco);
     if (!aruco.initialized) {
       aruco.initialized = true;
       initArPose(
@@ -726,7 +694,7 @@ void ArSlamSolver::solveCapture(Capture & capture, std::optional<unsigned> init_
     }
 
     if (!block.added) {
-      std::cout << "Adding block " << block_idx << " of " << blocks_.size() << std::endl;
+      std::cout << "Adding block " << block_handle.idx << " of " << blocks_.size() << std::endl;
       block.added = true;
       ArucoReprojectionError * cost_functor = new ArucoReprojectionError(block.aruco_rect);
       ceres::CostFunction * cost_function =
@@ -764,14 +732,14 @@ void ArSlamSolver::solve()
     }
   }
 
-  std::deque<unsigned> open_captures;
+  std::deque<CaptureHandle> open_captures;
 
   // first find capture with most ar-tags
   unsigned best_cap_idx = 0;
   {
-    unsigned best_ar_count = captures_.front().ar_ids.size();
+    unsigned best_ar_count = captures_.front().blocks.size();
     for (unsigned cap_idx = 1; cap_idx < captures_.size(); ++cap_idx) {
-      unsigned ar_count = captures_[cap_idx].ar_ids.size();
+      unsigned ar_count = captures_[cap_idx].blocks.size();
       if (ar_count > best_ar_count) {
         best_ar_count = ar_count;
         best_cap_idx = cap_idx;
@@ -781,9 +749,9 @@ void ArSlamSolver::solve()
       std::endl;
   }
 
-  open_captures.emplace_back(best_cap_idx);
   Capture & best_capture = captures_[best_cap_idx];
-  best_capture.init_block_idx = ~0; // TODO re-add
+  best_capture.init_block = BlockHandle(~0); // prevents capture from being added again
+  open_captures.emplace_back(best_capture.handle);
   if (false) { // forcing the first capture to be "fixed" actually makes conversion a little bit slower
     problem_.AddParameterBlock(best_capture.data(), best_capture.inv_pose.params.size());
     problem_.SetParameterBlockConstant(best_capture.data());
@@ -798,33 +766,33 @@ void ArSlamSolver::solve()
   }
 
   while (!open_captures.empty()) {
-    unsigned cap_idx = open_captures.front();
-    std::cout << "Processing capture " << cap_idx << std::endl;
+    CaptureHandle cap_handle = open_captures.front();
+    std::cout << "Processing capture " << cap_handle.idx << std::endl;
     open_captures.pop_front();
-    Capture & capture = captures_[cap_idx];
+    Capture & capture = at(cap_handle);
 
     // initialize captures pose using a spefic block with ar_tag that
     // has already been initialized
-    if (cap_idx != best_cap_idx) {
-      unsigned init_block_idx = capture.init_block_idx.value();
-      const Block & block = blocks_.at(init_block_idx);
-      std::cout << "Initializing capture " << cap_idx
-                << " using block " << init_block_idx
-                << " and ar id " << block.aruco.id << std::endl;
+    if (cap_handle.idx != best_cap_idx) {
+      BlockHandle init_block_handle = capture.init_block.value();
+      const Block & block = at(init_block_handle);
+      std::cout << "Initializing capture " << cap_handle.idx
+                << " using block " << init_block_handle.idx
+                << " and ar id " << at(block.aruco).id << std::endl;
       initCapturePose(
         block.aruco_rect,
         camera_.params.data(),
-        block.aruco.data(),
-        block.capture.data());
+        at(block.aruco).data(),
+        at(block.capture).data());
     }
 
     // TODO maybe add more than one new capture to problem on each optimize call
 
     // optimize problem
-    for (unsigned block_idx : capture.block_idxs) {
-      std::cerr << "block " << block_idx << " of " << blocks_.size() << std::endl;
-      Block & block = blocks_.at(block_idx);
-      Aruco & aruco = block.aruco;
+    for (BlockHandle block_handle : capture.blocks) {
+      std::cerr << "block " << block_handle.idx << " of " << blocks_.size() << std::endl;
+      Block & block = at(block_handle);
+      Aruco & aruco = at(block.aruco);
       if (!aruco.initialized) {
         aruco.initialized = true;
         initArPose(
@@ -835,7 +803,7 @@ void ArSlamSolver::solve()
       }
 
       if (!block.added) {
-        std::cout << "Adding block " << block_idx << " of " << blocks_.size() << std::endl;
+        std::cout << "Adding block " << block_handle.idx << " of " << blocks_.size() << std::endl;
         block.added = true;
         ArucoReprojectionError * cost_functor = new ArucoReprojectionError(block.aruco_rect);
         ceres::CostFunction * cost_function =
@@ -863,12 +831,12 @@ void ArSlamSolver::solve()
 
     if (false) { // TODO debug
       const Block & block = blocks_.at(10);
-      std::cerr << "Re-initialize capture with ar tag " << block.aruco.id << std::endl;
+      std::cerr << "Re-initialize capture with ar tag " << at(block.aruco).id << std::endl;
       initCapturePose(
         block.aruco_rect,
         camera_.params.data(),
-        block.aruco.data(),
-        block.capture.data());
+        at(block.aruco).data(),
+        at(block.capture).data());
       displayDebug(capture);
     }
 
@@ -879,27 +847,24 @@ void ArSlamSolver::solve()
 
 void ArSlamSolver::addConnectedCaptures(
   const Capture & base_capture,
-  std::deque<unsigned> & open_captures)
+  std::deque<CaptureHandle> & open_captures)
 {
-  for (unsigned ar_id : base_capture.ar_ids) {
-    // add any
-    std::cout << "Finding connected captures for ar tag " << ar_id << std::endl;
-    Aruco & aruco = aruco_map_.find(ar_id)->second;
-
-    for (unsigned block_idx : aruco.block_idxs) {
-      Block & block = blocks_.at(block_idx);
-      Capture & capture = block.capture;
-
-      if (!capture.init_block_idx.has_value()) {
-        capture.init_block_idx = block_idx;
-        open_captures.emplace_back(capture.idx);
+  for (BlockHandle base_block_handle : base_capture.blocks) {
+    Aruco & base_aruco = at(at(base_block_handle).aruco);
+    std::cout << "Finding connected captures for ar tag " << base_aruco.id << std::endl;
+    for (BlockHandle block_handle : base_aruco.blocks) {
+      Block & block = at(block_handle);
+      Capture & capture = at(block.capture);
+      if (!capture.init_block.has_value()) {
+        capture.init_block = block_handle;
+        open_captures.emplace_back(capture.handle);
       }
     }
   }
 }
 
 
-void ArSlamSolver::localize(unsigned first_loc_cap_idx)
+void ArSlamSolver::localizeMany(unsigned first_loc_cap_idx)
 {
   if (display_debug_) {
     // when debugging localization try displaying all ar tags
@@ -908,84 +873,87 @@ void ArSlamSolver::localize(unsigned first_loc_cap_idx)
     usleep(50 * 1000);
   }
 
-  for (Capture & capture: captures_) {
+  for (unsigned cap_idx = first_loc_cap_idx; cap_idx < captures_.size(); ++cap_idx) {
     // This capture was part of mapping process
-    if (capture.idx < first_loc_cap_idx) {
-      continue;
-    }
+    localizeOne(captures_.at(cap_idx), first_loc_cap_idx);
+  }
+}
 
-    if (display_debug_) {
-      capture.loadImg();
-    }
+void ArSlamSolver::localizeOne(Capture & capture, unsigned first_loc_cap_idx)
+{
+  if (display_debug_) {
+    capture.loadImg();
+  }
 
-    // before optimizing find an ar tag that is shared with
-    // one of the "mapping" captures
-    std::optional<unsigned> map_block_idx = [&]()
-      {
-        for (unsigned block_idx : capture.block_idxs) {
-          const Aruco & aruco = blocks_[block_idx].aruco;
-          for (unsigned cap_idx : aruco.cap_idxs) {
-            if (cap_idx < first_loc_cap_idx) {
-              std::cout << "Capture " << capture.idx
-                        << " shares aruco " << aruco.id
-                        << " with map capture " << cap_idx
-                        << std::endl;
-              return std::optional<unsigned>(block_idx);
-            }
+  // before optimizing find an ar tag that is shared with
+  // one of the "mapping" captures
+  std::optional<BlockHandle> map_block_handle = [&]()
+    {
+      for (BlockHandle connected_block_handle : capture.blocks) {
+        const Aruco & aruco = at(at(connected_block_handle).aruco);
+        for (BlockHandle block_handle : aruco.blocks) {
+          Capture & capture = at(at(block_handle).capture);
+          if (capture.handle.idx < first_loc_cap_idx) {
+            std::cout << "Capture " << capture.handle.idx
+                      << " shares aruco " << aruco.id
+                      << " with map capture " << capture.handle.idx
+                      << std::endl;
+            return std::optional<BlockHandle>(connected_block_handle);
           }
         }
-        return std::optional<unsigned>();
-      }();
-
-    if (!map_block_idx.has_value()) {
-      std::cout << "WARNING : Cannot find connected ar tags for capture " << capture.idx <<
-        std::endl;
-      continue;
-    }
-
-    resetProblem();
-
-    // Initial capture with connected block
-    {
-      const Block & block = blocks_.at(map_block_idx.value());
-      std::cout << "Initializing capture " << capture.idx
-                << " using block " << map_block_idx.value()
-                << " and ar id " << block.aruco.id << std::endl;
-      initCapturePose(
-        block.aruco_rect,
-        camera_.params.data(),
-        block.aruco.data(),
-        block.capture.data());
-    }
-
-    for (unsigned block_idx : capture.block_idxs) {
-      Block & block = blocks_.at(block_idx);
-      if (!block.added) {
-        std::cout << "Adding block " << block_idx << " of " << blocks_.size() << std::endl;
-        block.added = true;
-        ArucoReprojectionError * cost_functor = new ArucoReprojectionError(block.aruco_rect);
-        ceres::CostFunction * cost_function =
-          new ceres::AutoDiffCostFunction<ArucoReprojectionError, 8, 3, 6, 6>(cost_functor);
-        problem_.AddResidualBlock(
-          cost_function, nullptr,
-          camera_.params.data(),
-          capture.data(),
-          block.aruco.data());
-        // All aruco tags should be consant
-        problem_.SetParameterBlockConstant(block.aruco.data());
-      } else {
-        throw std::runtime_error("block for capture was somehow already added?");
       }
+      return std::optional<BlockHandle>();
+    }();
+
+  if (!map_block_handle.has_value()) {
+    std::cout << "WARNING : Cannot find connected ar tags for capture " << capture.handle.idx <<
+      std::endl;
+    return;
+  }
+
+  resetProblem();
+
+  // Initialize capture with connected block
+  {
+    const Block & block = at(map_block_handle.value());
+    std::cout << "Initializing capture " << capture.handle.idx
+              << " using block " << map_block_handle.value().idx
+              << " and ar id " << at(block.aruco).id << std::endl;
+    initCapturePose(
+      block.aruco_rect,
+      camera_.params.data(),
+      at(block.aruco).data(),
+      at(block.capture).data());
+  }
+
+  for (BlockHandle block_handle : capture.blocks) {
+    Block & block = at(block_handle);
+    if (!block.added) {
+      Aruco & aruco = at(block.aruco);
+      std::cout << "Adding block " << block_handle.idx << " of " << blocks_.size() << std::endl;
+      block.added = true;
+      ArucoReprojectionError * cost_functor = new ArucoReprojectionError(block.aruco_rect);
+      ceres::CostFunction * cost_function =
+        new ceres::AutoDiffCostFunction<ArucoReprojectionError, 8, 3, 6, 6>(cost_functor);
+      problem_.AddResidualBlock(
+        cost_function, nullptr,
+        camera_.params.data(),
+        capture.data(),
+        aruco.data());
+      // All aruco tags should be constant
+      problem_.SetParameterBlockConstant(aruco.data());
+    } else {
+      throw std::runtime_error("block for capture was somehow already added?");
     }
+  }
 
-    // Set camera block constant
-    problem_.SetParameterBlockConstant(camera_.params.data());
+  // Set camera block constant
+  problem_.SetParameterBlockConstant(camera_.params.data());
 
-    optimize(capture);
+  optimize(capture);
 
-    if (display_debug_) {
-      displayDebug(capture);
-    }
+  if (display_debug_) {
+    displayDebug(capture);
   }
 }
 
@@ -1033,6 +1001,56 @@ void ArSlamSolver::resetProblem()
 {
   problem_.~Problem();
   new (&problem_) ceres::Problem();
+}
+
+std::vector<geometry_msgs::msg::TransformStamped> ArSlamSolver::getTransforms(
+  const rclcpp::Time & stamp) const
+{
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  transforms.reserve(captures_.size() + arucos_.size());
+
+  for (const Aruco & aruco: arucos_) {
+    transforms.emplace_back();
+    auto & t = transforms.back();
+    t.header.stamp = stamp;
+    t.header.frame_id = "world";
+    t.child_frame_id = "aruco_" + std::to_string(aruco.id);
+
+    const auto & pose = aruco.pose.params;
+    t.transform.translation.x = pose.at(0);
+    t.transform.translation.y = pose.at(1);
+    t.transform.translation.z = pose.at(2);
+    double q[4];
+    ceres::AngleAxisToQuaternion(&pose.at(3), q);
+    // Ceres uses w,x,y,z ordering for its quaternions
+    t.transform.rotation.w = q[0];
+    t.transform.rotation.x = q[1];
+    t.transform.rotation.y = q[2];
+    t.transform.rotation.z = q[3];
+  }
+
+  for (const Capture & capture: captures_) {
+    transforms.emplace_back();
+    auto & t = transforms.back();
+    t.header.stamp = stamp;
+    t.header.frame_id = "world";
+    t.child_frame_id = "capture_" + std::to_string(capture.uid);
+
+    const auto & inv_pose = capture.inv_pose.params;
+    t.transform.translation.x = -inv_pose.at(0);
+    t.transform.translation.y = -inv_pose.at(1);
+    t.transform.translation.z = -inv_pose.at(2);
+    double rot[3] = {-inv_pose.at(3), -inv_pose.at(4), -inv_pose.at(5)};
+    double q[4];
+    ceres::AngleAxisToQuaternion(rot, q);
+    // Ceres uses w,x,y,z ordering for its quaternions
+    t.transform.rotation.w = q[0];
+    t.transform.rotation.x = q[1];
+    t.transform.rotation.y = q[2];
+    t.transform.rotation.z = q[3];
+  }
+
+  return transforms;
 }
 
 

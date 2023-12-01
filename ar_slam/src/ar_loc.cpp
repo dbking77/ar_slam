@@ -75,7 +75,7 @@ int main(int argc, char ** argv)
   }
   solver.loadImages(img_fns);
 
-  solver.localize(first_loc_cap_idx);
+  solver.localizeMany(first_loc_cap_idx);
   solver.printCameras();
 
   {

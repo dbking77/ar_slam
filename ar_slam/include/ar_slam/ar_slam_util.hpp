@@ -32,6 +32,9 @@ SOFTWARE.
 #include <string>
 #include <vector>
 
+// ROS2
+#include "rclcpp/rclcpp.hpp"
+
 //OpenCV
 #include "opencv2/opencv.hpp"
 
@@ -41,6 +44,10 @@ SOFTWARE.
 
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+
+// Yaml
+#include "yaml-cpp/yaml.h"
 
 struct Point
 {
@@ -82,18 +89,115 @@ struct PoseParams
   std::array<double, 6> params;
 };
 
+struct CaptureHandle
+{
+  //CaptureHandle() = default;
+  explicit CaptureHandle(unsigned _idx)
+  : idx{_idx} {}
+  bool operator==(const CaptureHandle & other) const {return other.idx == this->idx;}
+  const unsigned idx = ~0;
+};
+
+struct ArucoHandle
+{
+  //ArucoHandle() = default;
+  explicit ArucoHandle(unsigned _idx)
+  : idx{_idx} {}
+  const unsigned idx = ~0;
+};
+
+struct BlockHandle
+{
+  //BlockHandle() = default;
+  explicit BlockHandle(unsigned _idx)
+  : idx{_idx} {}
+  unsigned idx = ~0;
+};
+
+struct CaptureUid
+{
+  explicit CaptureUid(unsigned _uid)
+  : uid{_uid} {}
+  bool operator==(const CaptureUid & other) const {return other.uid == this->uid;}
+  const unsigned uid = 0;
+};
+
+struct ArucoId
+{
+  explicit ArucoId(unsigned _id)
+  : id{_id} {}
+  bool operator==(const ArucoId & other) const {return other.id == this->id;}
+  const unsigned id = 0;
+};
+
+
+namespace std
+{
+
+template<>
+struct hash<CaptureHandle>
+{
+  size_t operator()(const CaptureHandle & cap_handle) const
+  {
+    return cap_handle.idx;
+  }
+};
+
+template<>
+struct hash<CaptureUid>
+{
+  size_t operator()(const CaptureUid & cap_uid) const
+  {
+    return cap_uid.uid;
+  }
+};
+
+inline std::string to_string(const CaptureUid & cap_uid)
+{
+  return std::string("CaptureUid:") + std::to_string(cap_uid.uid);
+}
+
+template<>
+struct hash<ArucoId>
+{
+  size_t operator()(const ArucoId & ar_id) const
+  {
+    return ar_id.id;
+  }
+};
+
+inline std::string to_string(const ArucoId & ar_id)
+{
+  return std::string("ArucoId:") + std::to_string(ar_id.id);
+}
+
+} // namespace std
+
+
+inline std::ostream & operator<<(std::ostream & os, const ArucoId & ar_id)
+{
+  os << "ArucoId:" << ar_id.id;
+  return os;
+}
+
+inline std::ostream & operator<<(std::ostream & os, const CaptureUid & cap_uid)
+{
+  os << "CaptureUid:" << cap_uid.uid;
+  return os;
+}
 
 /// Represents a single capture from a camera
 struct Capture
 {
-  Capture(std::string _fn, unsigned _idx)
-  : img_fn{std::move(_fn)}, idx{_idx} {}
-  std::string img_fn;
+  Capture(CaptureUid _uid, CaptureHandle _handle, std::string _fn)
+  : uid{_uid}, handle{_handle}, img_fn{std::move(_fn)}
+  {}
+  const CaptureUid uid;
+  const CaptureHandle handle;
+  const std::string img_fn;
   cv::Mat img;
-  unsigned idx = 0;
-  std::vector<unsigned> ar_ids;
-  std::vector<unsigned> block_idxs;
-  std::optional<unsigned> init_block_idx;
+  std::vector<BlockHandle> blocks;
+  std::optional<BlockHandle> init_block;
 
   /**
    * inverse transform of pose
@@ -122,12 +226,12 @@ struct Capture
 /// Represents a unique AR tag
 struct Aruco
 {
-  Aruco(unsigned _id)
-  : id{_id} {}
-  unsigned id = 0;
+  Aruco(ArucoId _id, ArucoHandle _handle)
+  : id{_id}, handle{_handle} {}
+  const ArucoId id;
+  const ArucoHandle handle;
   bool initialized = false;
-  std::vector<unsigned> cap_idxs;
-  std::vector<unsigned> block_idxs;
+  std::vector<BlockHandle> blocks;  // is this needed?
   PoseParams pose;
   double * data() {return pose.params.data();}
   const double * data() const {return pose.params.data();}
@@ -190,37 +294,27 @@ struct ArucoRect
 struct Block
 {
   Block(
-    unsigned _block_idx,
+    BlockHandle _handle,
     const ArucoRect & _aruco_rect,
-    Capture & _capture,
-    Aruco & _aruco)
-  : block_idx{_block_idx},
+    CaptureHandle _capture,
+    ArucoHandle _aruco)
+  : handle{_handle},
     aruco_rect{_aruco_rect},
     capture{_capture},
     aruco{_aruco}
   {
-    connect();
   }
 
-  void connect()
-  {
-    capture.ar_ids.emplace_back(aruco.id);
-    capture.block_idxs.emplace_back(block_idx);
-    aruco.cap_idxs.emplace_back(capture.idx);
-    aruco.block_idxs.emplace_back(block_idx);
-  }
-
-  unsigned block_idx = 0;
+  BlockHandle handle;
   ArucoRect aruco_rect;
-  Capture & capture;
-  Aruco & aruco;
+  CaptureHandle capture;
+  ArucoHandle aruco;
   bool added = false;
 };
 
 
 /// 2.5 inches (parameterize value)
 static constexpr double aruco_size = 0.0635;
-
 
 /**
  * Point ordering from OpenCV Aruco tag detection
@@ -276,17 +370,73 @@ public:
 
   unsigned getNextCaptureIndex() const;
 
-  void localize(unsigned first_loc_cap_idx);
+  void localizeMany(unsigned first_loc_cap_idx);
 
   void addDetections(const ar_slam_interfaces::msg::Detections & detections);
+
+  std::vector<geometry_msgs::msg::TransformStamped>
+  getTransforms(const rclcpp::Time & stamp) const;
 
   bool & display_debug() {return display_debug_;}
   double & display_wait_duration() {return display_wait_duration_;}
 
 protected:
-  void addConnectedCaptures(const Capture & base_capture, std::deque<unsigned> & open_captures);
+  Capture & addCapture(CaptureUid cap_uid, std::string fn)
+  {
+    CaptureHandle cap_handle(captures_.size());
+    auto [itr, added] = capture_map_.try_emplace(cap_uid, cap_handle);
+    if (!added) {
+      throw std::runtime_error("Capture with uid already added");
+    }
+    captures_.emplace_back(std::move(cap_uid), cap_handle, std::move(fn));
+    return captures_.back();
+  }
 
-  void solveCapture(Capture & capture, std::optional<unsigned> init_block_idx);
+  Aruco & addAruco(ArucoId ar_id)
+  {
+    ArucoHandle ar_handle(arucos_.size());
+    aruco_map_.try_emplace(ar_id, ar_handle);
+    arucos_.emplace_back(std::move(ar_id), ar_handle);
+    return arucos_.back();
+  }
+
+  Aruco & getOrAddAruco(const ArucoId & ar_id)
+  {
+    auto aruco_itr = aruco_map_.find(ar_id);
+    if (aruco_itr == aruco_map_.end()) {
+      return addAruco(ar_id);
+    }
+    return at(aruco_itr->second);
+  }
+
+  Block & addBlock(
+    const ArucoRect aruco_rect,
+    CaptureHandle capture_handle,
+    ArucoHandle aruco_handle)
+  {
+    BlockHandle block_handle(blocks_.size());
+    blocks_.emplace_back(block_handle, std::move(aruco_rect), capture_handle, aruco_handle);
+    at(capture_handle).blocks.emplace_back(block_handle);
+    at(aruco_handle).blocks.emplace_back(block_handle);
+    return blocks_.back();
+  }
+
+  Capture & at(CaptureHandle handle) {return captures_[handle.idx];}
+  const Capture & at(CaptureHandle handle) const {return captures_[handle.idx];}
+
+  Aruco & at(ArucoHandle handle) {return arucos_[handle.idx];}
+  const Aruco & at(ArucoHandle handle) const {return arucos_[handle.idx];}
+
+  Block & at(BlockHandle handle) {return blocks_[handle.idx];}
+  const Block & at(BlockHandle handle) const {return blocks_[handle.idx];}
+
+  void localizeOne(Capture & capture, unsigned first_loc_cap_idx);
+
+  void addConnectedCaptures(
+    const Capture & base_capture,
+    std::deque<CaptureHandle> & open_captures);
+
+  void solveCapture(Capture & capture, std::optional<BlockHandle> init_block_handle);
 
   void optimize(const Capture & capture);
 
@@ -301,24 +451,36 @@ protected:
   // Data store
   std::deque<Capture> captures_;
   std::deque<Aruco> arucos_;
-  std::deque<Block> blocks_;
+  std::vector<Block> blocks_;
 
   // Capture index and ar_tags ID might not start from 0
   // have a lookup from ar_id and cap_idx into array index in data store
-  std::unordered_map<unsigned, Capture &> capture_map_;
-  std::unordered_map<unsigned, Aruco &> aruco_map_;
+  std::unordered_map<CaptureUid, CaptureHandle> capture_map_;
+  std::unordered_map<ArucoId, ArucoHandle> aruco_map_;
 
   /**
    * When solving incremental it is not always possible to solve a new
    * capture if it is not connected to the rest of captures through a common
    * ar tag.
    */
-  std::unordered_set<unsigned> unsolved_captures_;
+  std::unordered_set<CaptureHandle> unsolved_captures_;
 
   bool display_debug_ = true;
   bool display_debug_show_all_ar_ = false;
   double display_wait_duration_ = 0.0;
 };
+
+inline YAML::Emitter & operator<<(YAML::Emitter & out, const CaptureUid & uid)
+{
+  out << uid.uid;
+  return out;
+}
+
+inline YAML::Emitter & operator<<(YAML::Emitter & out, const ArucoId & id)
+{
+  out << id.id;
+  return out;
+}
 
 
 #endif  // AR_SLAM_AR_SLAM_UTIL
