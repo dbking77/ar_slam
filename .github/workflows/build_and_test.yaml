@@ -1,0 +1,18 @@
+name: build-and-test
+run-name: ${{ github.actor }} build-and-test
+on: [push]
+jobs:
+  build-and-test-job:
+    runs-on: ubuntu-latest
+    container: ros:iron-perception-jammy
+    steps:
+      - run: mkdir -p ros_ws/src
+      - uses: actions/checkout@v4
+        with:
+          path: ros_ws/src/ar_slam_stack
+      - run: apt update
+      - run: apt install -y libceres-dev
+      - run: cd ros_ws && . /opt/ros/iron/setup.sh && colcon build --packages-select ar_slam_interfaces ar_slam --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - run: cd ros_ws && . install/setup.sh && AMENT_CPPCHECK_ALLOW_SLOW_VERSIONS=TRUE colcon test --ctest-args tests --packages-select ar_slam
+      - run: cd ros_ws && colcon test-result --all
+      

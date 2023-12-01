@@ -1,4 +1,4 @@
-## About
+x## About
 This project uses multiple image captures to compute relevant camera parameters and AR tags poses.
 All captures are assumed to by made with the same camera, and all AR tags are assumed to be the same size.
 
@@ -110,11 +110,17 @@ A few things are done to improve performance.
 ## Build
 Tested on Ubuntu 22.04 and ROS2 Iron Irwini
 
-Need following dev packags installed
-- libceres-dev
-- libopencv-dev
-- libeigen3-dev
+Use perception install to get most dependencies
+```
+docker pull ros:iron-perception-jammy
+```
+
+Need extra ceres dev packages installed:
+```
+sudo apt update
+sudo apt install -y libceres-dev
+```
 
 ```
-colcon build --packages-select ar_slam_interface ar_slam
+colcon build --packages-select ar_slam_interface ar_slam --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
