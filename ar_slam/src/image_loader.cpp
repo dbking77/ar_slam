@@ -106,7 +106,7 @@ public:
     rclcpp::PublisherOptions pub_options;
     // pub_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
     publisher_ =
-      this->create_publisher<ar_slam_interfaces::msg::Capture>("images", 10, pub_options);
+      this->create_publisher<ar_slam_interfaces::msg::Capture>("captures", 10, pub_options);
 
     timer_ = this->create_wall_timer(
       std::chrono::duration<double>(pub_period),

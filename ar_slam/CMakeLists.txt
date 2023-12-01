@@ -15,10 +15,13 @@ find_package(cv_bridge REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 # Messages
 find_package(ar_slam_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(rosbag2_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
@@ -43,20 +46,28 @@ add_library(ar_slam_util SHARED
 )
 ament_target_dependencies(ar_slam_util
   ar_slam_interfaces
+  geometry_msgs
+  tf2
+  tf2_ros
 )
 target_link_libraries(ar_slam_util ceres Eigen3::Eigen ${OpenCV_LIBS})
 
 add_library(ar_slam_components SHARED
   src/ar_slam.cpp
   src/aruco_detector.cpp
+  src/bag_recorder.cpp
   src/image_loader.cpp
   src/merge_detections.cpp
 )
 ament_target_dependencies(ar_slam_components
   ar_slam_interfaces
   cv_bridge
+  geometry_msgs
   rclcpp
+  rosbag2_cpp
   sensor_msgs
+  tf2
+  tf2_ros
 )
 target_link_libraries(ar_slam_components
   ar_slam_util
@@ -67,6 +78,7 @@ target_link_libraries(ar_slam_components
 )
 rclcpp_components_register_nodes(ar_slam_components "ar_slam::ArSlam")
 rclcpp_components_register_nodes(ar_slam_components "ar_slam::ArucoDetector")
+rclcpp_components_register_nodes(ar_slam_components "ar_slam::BagRecorder")
 rclcpp_components_register_nodes(ar_slam_components "ar_slam::ImageLoader")
 rclcpp_components_register_nodes(ar_slam_components "ar_slam::MergeDetections")
 
