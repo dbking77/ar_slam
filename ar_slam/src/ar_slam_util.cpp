@@ -35,6 +35,9 @@ SOFTWARE.
 #include "opencv2/opencv.hpp"
 #include "opencv2/aruco.hpp"
 
+// ROS2 Other
+#include "sensor_msgs/distortion_models.hpp"
+
 void composeAxisAngle(const double * rot1, const double * rot2, double * out)
 {
   double q1[4];
@@ -241,7 +244,6 @@ cv::Mat ArSlamSolver::checkAndFixImageSize(cv::Mat img)
   return img;
 }
 
-
 void ArSlamSolver::loadImages(const std::vector<std::string> & img_fns)
 {
   cv::Ptr<cv::aruco::DetectorParameters> parameters(new cv::aruco::DetectorParameters);
@@ -270,12 +272,12 @@ void ArSlamSolver::loadImages(const std::vector<std::string> & img_fns)
     }
 
     // make up a Uid for capture that isn't the same as the index
-    CaptureUid cap_uid(captures_.size() + 100);
+    CaptureUid cap_uid{genUniqueCaptureUid()};
     Capture & capture = addCapture(cap_uid, img_fn);
     capture.img = img;
 
     for (unsigned ii = 0; ii < ids.size(); ++ii) {
-      ArucoId ar_id(ids[ii]);
+      ArucoId ar_id("aruco_4X4_50_" + std::to_string(ids[ii]));
       Aruco & aruco = getOrAddAruco(ar_id);
       ArucoRect aruco_rect(rects.at(ii), img.size());
       addBlock(aruco_rect, capture.handle, aruco.handle);
@@ -283,27 +285,34 @@ void ArSlamSolver::loadImages(const std::vector<std::string> & img_fns)
   }
 }
 
-
-unsigned ArSlamSolver::getNextCaptureIndex() const
+CaptureUid ArSlamSolver::genUniqueCaptureUid() const
 {
-  unsigned next_cap_idx = 0;
-  for (const Capture & capture : captures_) {
-    next_cap_idx = std::max(next_cap_idx, capture.handle.idx + 1);
+  std::string base = std::string("cap_") + std::to_string(captures_.size());
+  if (CaptureUid uid{base}; capture_map_.count(uid) == 0) {
+    return uid;
   }
-  return next_cap_idx;
+  for (unsigned idx = 0; idx < 1000; ++idx) {
+    CaptureUid uid{base + "_" + std::to_string(idx)};
+    if (capture_map_.count(uid) == 0) {
+      return uid;
+    }
+  }
+  throw std::runtime_error("cannot generate unique id");
 }
 
 
 void ArSlamSolver::loadYaml(const std::string & fn)
 {
-  // When loading
-  unsigned cap_idx_offset = getNextCaptureIndex();
-
   YAML::Node doc = YAML::LoadFile(fn);
 
   YAML::Node captures = doc["captures"];
   for (auto cap_itr : captures) {
-    CaptureUid cap_uid(cap_itr.first.as<int>() + cap_idx_offset);
+    CaptureUid cap_uid(cap_itr.first.as<std::string>());
+    if (capture_map_.count(cap_uid)) {
+      std::ostringstream ss;
+      ss << "capture with id " << cap_uid << " already exists";
+      throw std::runtime_error(ss.str());
+    }
     YAML::Node cap_data = cap_itr.second;
     std::string img_fn = cap_data["img_fn"].as<std::string>();
     Capture & capture = addCapture(cap_uid, img_fn);
@@ -315,7 +324,7 @@ void ArSlamSolver::loadYaml(const std::string & fn)
 
   YAML::Node arucos = doc["arucos"];
   for (auto ar_itr : arucos) {
-    ArucoId ar_id(ar_itr.first.as<int>());
+    ArucoId ar_id(ar_itr.first.as<std::string>());
     Aruco & aruco = addAruco(ar_id);
     YAML::Node ar_data = ar_itr.second;
     YAML::Node pose_data = ar_data["pose"];
@@ -326,11 +335,11 @@ void ArSlamSolver::loadYaml(const std::string & fn)
 
   YAML::Node blocks = doc["blocks"];
   for (auto block_data : blocks) {
-    CaptureUid cap_uid(block_data["capture"].as<int>() + cap_idx_offset);
+    CaptureUid cap_uid(block_data["capture"].as<std::string>());
 
     CaptureHandle cap_handle = capture_map_.at(cap_uid);
 
-    ArucoId ar_id(block_data["aruco"].as<int>());
+    ArucoId ar_id(block_data["aruco"].as<std::string>());
     ArucoHandle & ar_handle = aruco_map_.at(ar_id);
 
     YAML::Node rect_data = block_data["aruco_rect"];
@@ -500,7 +509,7 @@ void ArSlamSolver::displayDebug(const Capture & capture)
       center_y *= 0.25;
 
       cv::putText(
-        scaled_img, std::to_string(aruco.id.id),
+        scaled_img, std::to_string(aruco.id),
         cv::Point(center_x, center_y),
         cv::FONT_HERSHEY_DUPLEX, 0.5,
         color, 1);
@@ -531,7 +540,7 @@ void ArSlamSolver::displayDebug(const Capture & capture)
     center_x *= 0.25;
     center_y *= 0.25;
     cv::putText(
-      scaled_img, std::to_string(aruco.id.id),
+      scaled_img, std::to_string(aruco.id),
       cv::Point(center_x, center_y),
       cv::FONT_HERSHEY_DUPLEX, 0.5,
       cv::Scalar(200, 0, 200), 1);
@@ -579,10 +588,11 @@ void ArSlamSolver::compareProjections() const
   }
 }
 
-void ArSlamSolver::addDetections(const ar_slam_interfaces::msg::Detections & detections)
+std::optional<CaptureHandle> ArSlamSolver::addDetections(
+  const ar_slam_interfaces::msg::Detections & detections)
 {
   if (detections.detections.empty()) {
-    return;
+    return std::nullopt;
   }
 
   cv::Size image_size(detections.image_width, detections.image_height);
@@ -592,15 +602,18 @@ void ArSlamSolver::addDetections(const ar_slam_interfaces::msg::Detections & det
                 << " expected " << camera_.size.value()
                 << " got " << image_size
                 << std::endl;
-      return;
+      return std::nullopt;
     }
   } else {
     camera_.size = image_size;
   }
 
   // Create new capture for detection
-  const unsigned capture_uid_offset = 1000;
-  CaptureUid cap_uid(captures_.size() + capture_uid_offset);
+  CaptureUid cap_uid(detections.capture_uid);
+  if (capture_map_.count(cap_uid)) {
+    std::ostringstream ss;
+    ss << "capture uid " << cap_uid << " already exists" << std::endl;
+  }
   Capture & capture = addCapture(cap_uid, detections.image_path);
 
   for (const auto & detection : detections.detections) {
@@ -610,6 +623,7 @@ void ArSlamSolver::addDetections(const ar_slam_interfaces::msg::Detections & det
   }
 
   unsolved_captures_.insert(capture.handle);
+  return capture.handle;
 }
 
 void ArSlamSolver::solveIncremental()
@@ -677,6 +691,13 @@ void ArSlamSolver::solveCapture(Capture & capture, std::optional<BlockHandle> in
       camera_.params.data(),
       aruco.data(),
       capture.data());
+  } else {
+    // forcing the first capture to be "fixed" makes debugging transform issues easier
+    // but makes solver slower to converge
+    if (false) {
+      problem_.AddParameterBlock(capture.data(), capture.inv_pose.params.size());
+      problem_.SetParameterBlockConstant(capture.data());
+    }
   }
 
   // Add all blocks for capture to problem
@@ -1014,7 +1035,7 @@ std::vector<geometry_msgs::msg::TransformStamped> ArSlamSolver::getTransforms(
     auto & t = transforms.back();
     t.header.stamp = stamp;
     t.header.frame_id = "world";
-    t.child_frame_id = "aruco_" + std::to_string(aruco.id);
+    t.child_frame_id = std::to_string(aruco.id);
 
     const auto & pose = aruco.pose.params;
     t.transform.translation.x = pose.at(0);
@@ -1034,12 +1055,11 @@ std::vector<geometry_msgs::msg::TransformStamped> ArSlamSolver::getTransforms(
     auto & t = transforms.back();
     t.header.stamp = stamp;
     t.header.frame_id = "world";
-    t.child_frame_id = "capture_" + std::to_string(capture.uid);
+    t.child_frame_id = std::to_string(capture.uid);
 
     const auto & inv_pose = capture.inv_pose.params;
-    t.transform.translation.x = -inv_pose.at(0);
-    t.transform.translation.y = -inv_pose.at(1);
-    t.transform.translation.z = -inv_pose.at(2);
+
+    //double rot[3] = {-inv_pose.at(3), -inv_pose.at(4), -inv_pose.at(5)};
     double rot[3] = {-inv_pose.at(3), -inv_pose.at(4), -inv_pose.at(5)};
     double q[4];
     ceres::AngleAxisToQuaternion(rot, q);
@@ -1048,9 +1068,97 @@ std::vector<geometry_msgs::msg::TransformStamped> ArSlamSolver::getTransforms(
     t.transform.rotation.x = q[1];
     t.transform.rotation.y = q[2];
     t.transform.rotation.z = q[3];
+
+    t.transform.translation.x = -inv_pose.at(0);
+    t.transform.translation.y = -inv_pose.at(1);
+    t.transform.translation.z = -inv_pose.at(2);
   }
 
   return transforms;
+}
+
+sensor_msgs::msg::CameraInfo ArSlamSolver::getCameraInfo() const
+{
+  sensor_msgs::msg::CameraInfo info;
+  info.distortion_model = sensor_msgs::distortion_models::PLUMB_BOB;
+  // For "plumb_bob", the 5 parameters are: (k1, k2, t1, t2, k3).
+  info.d = {0, 0, 0, 0, 0};
+
+  // Intrinsic camera matrix for the raw (distorted) images.
+  //     [fx  0 cx]
+  // K = [ 0 fy cy]
+  //     [ 0  0  1]
+  // Projects 3D points in the camera coordinate frame to 2D pixel
+  // coordinates using the focal lengths (fx, fy) and principal point
+  // (cx, cy).
+  // float64[9]  k # 3x3 row-major matrix
+  const double fx = camera_.params.at(0);
+  const double fy = camera_.params.at(0);
+
+  // TODO maybe have solver determine center
+  const double cx = camera_.size.value().width * 0.5;
+  const double cy = camera_.size.value().height * 0.5;
+  info.k = {
+    fx, 0.0, cx,
+    0.0, fy, cy,
+    0.0, 0.0, 1.0
+  };
+
+  info.r = {
+    1.0, 0.0, 0.0,
+    0.0, 1.0, 0.0,
+    0.0, 0.0, 1.0
+  };
+
+  // Projection/camera matrix
+  //     [fx'  0  cx' Tx]
+  // P = [ 0  fy' cy' Ty]
+  //     [ 0   0   1   0]
+  // For monocular cameras, Tx = Ty = 0. Normally, monocular cameras will
+  //  also have R = the identity and P[1:3,1:3] = K.
+  const double tx = 0.0;
+  const double ty = 0.0;
+  info.p = {
+    fx, 0.0, cx, tx,
+    0.0, fy, cy, ty,
+    0.0, 0.0, 1.0, 0.0
+  };
+
+  return info;
+}
+
+
+void ArSlamSolver::appendArucoMarkers(
+  std::vector<visualization_msgs::msg::Marker> & markers,
+  rclcpp::Time stamp) const
+{
+  markers.reserve(markers.size() + arucos_.size() + 1);  // round up to next power of 2?
+
+  {
+    markers.emplace_back();
+    auto & marker = markers.back();
+    marker.header.stamp = stamp;
+    marker.action = marker.DELETEALL;
+    marker.ns = "arucos";
+  }
+
+  for (unsigned idx = 0; idx < arucos_.size(); ++idx) {
+    const Aruco & aruco = arucos_[idx];
+    markers.emplace_back();
+    auto & marker = markers.back();
+    marker.header.stamp = stamp;
+    marker.header.frame_id = std::to_string(aruco.id);
+    marker.type = marker.CUBE;
+    marker.action = marker.ADD;
+    marker.ns = "arucos";
+    marker.id = idx;
+    marker.scale.x = aruco_size;
+    marker.scale.y = aruco_size;
+    marker.scale.z = 0.01; // 1cm thick
+    marker.color.a = 0.8;
+    marker.color.r = 1.0;
+    marker.frame_locked = true;
+  }
 }
 
 

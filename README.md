@@ -101,13 +101,32 @@ Most of the different components are implemented as ROS2 components.  The compon
                      +-----------+
 ```
 
-### Performance ###
+### Performance
 A few things are done to improve performance.
  - A multi-threaded container is used allowing multiple component callbacks to be run in parallel.
  - Intra-process message passing is enabled.  Internal ROS messages are passes around using unique are shared pointers instead of being serialized and deserialized.
 
+### Foxglove
+
+Use layout in arSlamRepub/foxglove_layout.json
+
+<img src="ar_slam/resources/images/foxglove.jpg" width="600">
+
+Record topics while running
+```
+ros2 bag record --all
+```
+
+Or use bridge
+```
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
 
 ## Build
+
+### ROS2
+
 Tested on Ubuntu 22.04 and ROS2 Iron Irwini
 
 Use perception install to get most dependencies
@@ -123,4 +142,89 @@ sudo apt install -y libceres-dev
 
 ```
 colcon build --packages-select ar_slam_interfaces ar_slam --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+```
+
+### Foxglove
+Provide message converter plugin to Foxglove.
+The converter will connvert the Capture message to an Image that Foxglove can display.
+
+
+#### Install NVM
+Need newer version of NPM that Ubuntu apt repro can provide.  Use NVM installer.
+
+Install NVM
+```
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh
+```
+
+Re-source bashrc (to get install changes)
+```
+source ~/.bashrc
+```
+
+List options
+```
+nvm list-remote
+```
+
+Install 20.10
+```
+nvm install v20.10.0
+```
+
+Check installed version
+```
+nvm list
+```
+
+#### Build plugin
+
+Build a local install
+```
+cd arSlamRepub
+npm run local-install
+```
+
+The plugin should be installed under : ~/.foxglove-studio/extensions/...
+
+In Foxglove, go to user icon (top right), and select "Extensions" in drop-down menu.
+Under "LOCAL" there should be an "arSlamRepub" extension list near the top.
+
+The /captures topic should now be availble in any tab that can display an Image type.
+
+
+#### Rebuild plugin
+Bump version on package.json
+```
+nano arSlamRepub/package.json
+```
+
+Bumping version after modifying code, provides an easy way to verify new plugin is
+being used in foxglove.
+```
+"version": "0.0.6",
+```
+
+Re-build a local install
+```
+npm run local-install
+```
+
+In the running Foxglove, un-install the previoius version of the plugin.
+Go to Exensions, select the arSlamRepub, and click the "Uninstall" button.
+Then click "Back", to get back to the list of plugins.
+Once there, the new plugin version should be shown.
+
+
+## Image
+Cellphone images are too large to check into Git; downsize, compress, greyscale, and remove metadata first.
+
+Use imagemagik to resize, convert to grayscale, and increase compression.  Adding some gaussian blur, helps with compression at bit.
+```
+for f in `find . -name "*.jpg"`; do convert $f -resize 25% -colorspace Gray -gaussian-blur 0.05 -quality 50% $f.resized.jpg; done
+```
+
+Use exiftool to remove all image metadata.  This also provides spacesavings since image thumbnail is often stored as metadata.
+```
+exiftool -all= *.jpg
 ```

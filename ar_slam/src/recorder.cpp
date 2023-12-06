@@ -31,6 +31,7 @@ SOFTWARE.
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
 #include "ar_slam_interfaces/msg/capture.hpp"
+//#include "sensor_msgs/msg/image.hpp"
 
 // ROS2 Other
 #include "cv_bridge/cv_bridge.hpp"
@@ -77,6 +78,18 @@ public:
       aruco_dict_ = cv::aruco::getPredefinedDictionary(itr->second);
     }
 
+    {
+      rcl_interfaces::msg::ParameterDescriptor desc{};
+      desc.name = "id_offset";
+      desc.read_only = true;
+      desc.description =
+        "offset to add to detected Arudo ID.  Allows different types of tags to be used with overlapping ID ranges";
+      desc.integer_range.emplace_back();
+      desc.integer_range.at(0).from_value = 0;
+      desc.integer_range.at(0).to_value = 1000 * 1000 * 1000;
+      id_offset_ = this->declare_parameter(desc.name, 0, desc);
+    }
+
     callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
     rclcpp::SubscriptionOptions sub_options;
@@ -84,7 +97,7 @@ public:
     rclcpp::QoS qos(10);
     using std::placeholders::_1;
     subscription_ = this->create_subscription<ar_slam_interfaces::msg::Capture>(
-      "captures", qos, std::bind(&ArucoDetector::image_callback, this, _1), sub_options);
+      "images", qos, std::bind(&ArucoDetector::image_callback, this, _1), sub_options);
 
     publisher_ = this->create_publisher<ar_slam_interfaces::msg::Detections>("detections", 10);
   }
@@ -117,11 +130,11 @@ protected:
     msg->image_width = capture->image.width;
     msg->image_height = capture->image.height;
     msg->image_path = capture->image_path;
-    msg->detector_types.emplace_back(detector_name_);
+    msg->detectors.emplace_back(detector_name_);
     msg->detections.resize(ids.size());
     for (unsigned idx = 0; idx < ids.size(); ++idx) {
       auto & detection = msg->detections.at(idx);
-      detection.id = detector_name_ + '_' + std::to_string(ids[idx]);
+      detection.id = ids[idx] + id_offset_;
       const auto & rect = rects.at(idx);
       for (unsigned ii = 0; ii < 4; ++ii) {
         Point point = from_cv_img(rect.at(ii), img_size);
