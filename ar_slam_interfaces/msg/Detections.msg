@@ -10,7 +10,10 @@ uint32 image_width
 # filepath to source image (for debugging purposes)
 string image_path
 
+# image used to create detection
+sensor_msgs/Image image
+
 # names of different detectors that generated the detections
-string[] detectors
+string[] detector_types
 
 ar_slam_interfaces/Detection[] detections

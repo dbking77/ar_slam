@@ -24,6 +24,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 # LIBRARIES
 find_package(Ceres REQUIRED)
@@ -49,6 +50,7 @@ ament_target_dependencies(ar_slam_util
   geometry_msgs
   tf2
   tf2_ros
+  visualization_msgs
 )
 target_link_libraries(ar_slam_util ceres Eigen3::Eigen ${OpenCV_LIBS})
 
@@ -68,6 +70,7 @@ ament_target_dependencies(ar_slam_components
   sensor_msgs
   tf2
   tf2_ros
+  visualization_msgs
 )
 target_link_libraries(ar_slam_components
   ar_slam_util

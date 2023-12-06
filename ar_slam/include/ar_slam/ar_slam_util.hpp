@@ -45,6 +45,8 @@ SOFTWARE.
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 // Yaml
 #include "yaml-cpp/yaml.h"
@@ -116,18 +118,18 @@ struct BlockHandle
 
 struct CaptureUid
 {
-  explicit CaptureUid(unsigned _uid)
-  : uid{_uid} {}
+  explicit CaptureUid(std::string _uid)
+  : uid{std::move(_uid)} {}
   bool operator==(const CaptureUid & other) const {return other.uid == this->uid;}
-  const unsigned uid = 0;
+  const std::string uid = 0;
 };
 
 struct ArucoId
 {
-  explicit ArucoId(unsigned _id)
-  : id{_id} {}
+  explicit ArucoId(std::string _id)
+  : id{std::move(_id)} {}
   bool operator==(const ArucoId & other) const {return other.id == this->id;}
-  const unsigned id = 0;
+  const std::string id = 0;
 };
 
 
@@ -148,13 +150,13 @@ struct hash<CaptureUid>
 {
   size_t operator()(const CaptureUid & cap_uid) const
   {
-    return cap_uid.uid;
+    return std::hash<std::string>{}(cap_uid.uid);
   }
 };
 
-inline std::string to_string(const CaptureUid & cap_uid)
+inline const std::string & to_string(const CaptureUid & cap_uid)
 {
-  return std::string("CaptureUid:") + std::to_string(cap_uid.uid);
+  return cap_uid.uid;
 }
 
 template<>
@@ -162,13 +164,13 @@ struct hash<ArucoId>
 {
   size_t operator()(const ArucoId & ar_id) const
   {
-    return ar_id.id;
+    return std::hash<std::string>{}(ar_id.id);
   }
 };
 
-inline std::string to_string(const ArucoId & ar_id)
+inline const std::string & to_string(const ArucoId & ar_id)
 {
-  return std::string("ArucoId:") + std::to_string(ar_id.id);
+  return ar_id.id;
 }
 
 } // namespace std
@@ -190,7 +192,7 @@ inline std::ostream & operator<<(std::ostream & os, const CaptureUid & cap_uid)
 struct Capture
 {
   Capture(CaptureUid _uid, CaptureHandle _handle, std::string _fn)
-  : uid{_uid}, handle{_handle}, img_fn{std::move(_fn)}
+  : uid{std::move(_uid)}, handle{_handle}, img_fn{std::move(_fn)}
   {}
   const CaptureUid uid;
   const CaptureHandle handle;
@@ -231,7 +233,7 @@ struct Aruco
   const ArucoId id;
   const ArucoHandle handle;
   bool initialized = false;
-  std::vector<BlockHandle> blocks;  // is this needed?
+  std::vector<BlockHandle> blocks;
   PoseParams pose;
   double * data() {return pose.params.data();}
   const double * data() const {return pose.params.data();}
@@ -240,7 +242,7 @@ struct Aruco
 
 /**
  * Convert point in capture x,y space to OpenCV coordinate system.
- * For this problem, 0,0 is at center of image, and x,y is normal cordinate system (+y is up)
+ * For this problem, 0,0 is at center of image, and x,y is normal cordinate system (+y is down)
  * OpenCV uses for images where y-axis increased downward and top-left is corner is 0,0
  * Also optionally scale down coordinates to scaled image
  */
@@ -248,15 +250,15 @@ inline cv::Point to_cv_img(double x, double y, const cv::Size & scaled_img_size,
 {
   const float xc = 0.5 * scaled_img_size.width;
   const float yc = 0.5 * scaled_img_size.height;
-  return cv::Point((scale * x + xc), (-scale * y + yc));
+  return cv::Point((scale * x + xc), (scale * y + yc));
 }
 
 
 inline Point from_cv_img(const cv::Point2f & point, const cv::Size & img_size)
 {
   return Point {
-    +(point.x - 0.5 * img_size.width),
-    -(point.y - 0.5 * img_size.height)
+    (point.x - 0.5 * img_size.width),
+    (point.y - 0.5 * img_size.height)
   };
 }
 
@@ -321,12 +323,27 @@ static constexpr double aruco_size = 0.0635;
  * top left, top right, bottom right, bottom left
  * -x,+y,  +x,+y, +x,-y, -x,-y
  */
+/*
 static const std::array<Point, 4> ARUCO_DIRECTIONS = {
   Point{-1, +1},
   Point{+1, +1},
   Point{+1, -1},
   Point{-1, -1}
 };
+*/
+
+/**
+ * Point ordering from OpenCV Aruco tag detection
+ * top left, top right, bottom right, bottom left
+ * -x,-y,  +x,-y, +x,+y, -x,+y
+ */
+static const std::array<Point, 4> ARUCO_DIRECTIONS = {
+  Point{-1, -1},
+  Point{+1, -1},
+  Point{+1, +1},
+  Point{-1, +1}
+};
+
 
 inline double normalize_angle(double angle)
 {
@@ -368,17 +385,35 @@ public:
 
   void solveIncremental();
 
-  unsigned getNextCaptureIndex() const;
+  CaptureUid genUniqueCaptureUid() const;
+
+  unsigned getNextCaptureIndex() const {return captures_.size();}
 
   void localizeMany(unsigned first_loc_cap_idx);
 
-  void addDetections(const ar_slam_interfaces::msg::Detections & detections);
+  std::optional<CaptureHandle> addDetections(
+    const ar_slam_interfaces::msg::Detections & detections);
 
   std::vector<geometry_msgs::msg::TransformStamped>
   getTransforms(const rclcpp::Time & stamp) const;
 
+  sensor_msgs::msg::CameraInfo getCameraInfo() const;
+
+  void appendArucoMarkers(
+    std::vector<visualization_msgs::msg::Marker> & markers,
+    rclcpp::Time stamp) const;
+
   bool & display_debug() {return display_debug_;}
   double & display_wait_duration() {return display_wait_duration_;}
+
+  Capture & at(CaptureHandle handle) {return captures_[handle.idx];}
+  const Capture & at(CaptureHandle handle) const {return captures_[handle.idx];}
+
+  Aruco & at(ArucoHandle handle) {return arucos_[handle.idx];}
+  const Aruco & at(ArucoHandle handle) const {return arucos_[handle.idx];}
+
+  Block & at(BlockHandle handle) {return blocks_[handle.idx];}
+  const Block & at(BlockHandle handle) const {return blocks_[handle.idx];}
 
 protected:
   Capture & addCapture(CaptureUid cap_uid, std::string fn)
@@ -420,15 +455,6 @@ protected:
     at(aruco_handle).blocks.emplace_back(block_handle);
     return blocks_.back();
   }
-
-  Capture & at(CaptureHandle handle) {return captures_[handle.idx];}
-  const Capture & at(CaptureHandle handle) const {return captures_[handle.idx];}
-
-  Aruco & at(ArucoHandle handle) {return arucos_[handle.idx];}
-  const Aruco & at(ArucoHandle handle) const {return arucos_[handle.idx];}
-
-  Block & at(BlockHandle handle) {return blocks_[handle.idx];}
-  const Block & at(BlockHandle handle) const {return blocks_[handle.idx];}
 
   void localizeOne(Capture & capture, unsigned first_loc_cap_idx);
 

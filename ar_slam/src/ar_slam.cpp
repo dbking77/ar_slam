@@ -36,6 +36,9 @@ SOFTWARE.
 // ROS2 Interfaces
 #include "ar_slam_interfaces/msg/detections.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 // Components
 #include <rclcpp_components/register_node_macro.hpp>
@@ -83,6 +86,10 @@ public:
     // TODO size params for different detection types?
     callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+    image_pub_ = this->create_publisher<sensor_msgs::msg::Image>("/ar_slam/image", 10);
+    camera_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>("/ar_slam/camera_info", 10);
+    viz_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/ar_slam/viz", 10);
+
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
     rclcpp::QoS qos(10);
@@ -111,17 +118,49 @@ protected:
                                  << " detections for " << detections->capture_uid
                                  << " from " << detections->image_path);
 
-    if (!detections->detections.empty()) {
-      solver_.addDetections(*detections);
+    // Capture handle should always be valid if image has detections
+    std::optional<CaptureHandle> capture_handle = solver_.addDetections(*detections);
+    if (!capture_handle.has_value()) {
+      RCLCPP_WARN_STREAM(
+        this->get_logger(),
+        "No failed adding capture " << detections->capture_uid);
+      return;
     }
+
     solver_.solveIncremental();
 
-    tf_broadcaster_->sendTransform(solver_.getTransforms(this->get_clock()->now()));
+    rclcpp::Time stamp = this->get_clock()->now();
+    tf_broadcaster_->sendTransform(solver_.getTransforms(stamp));
+
+    if (detections->image.data.size()) {
+      auto image_msg = std::make_unique<sensor_msgs::msg::Image>(detections->image);
+      image_msg->header.frame_id = std::to_string(solver_.at(capture_handle.value()).uid);
+      image_msg->header.stamp = stamp;
+      image_pub_->publish(std::move(image_msg));
+    } else {
+      RCLCPP_WARN(get_logger(), "Empty image in detections message");
+    }
+
+    {
+      auto camera_msg = std::make_unique<sensor_msgs::msg::CameraInfo>(solver_.getCameraInfo());
+      camera_msg->header.frame_id = std::to_string(solver_.at(capture_handle.value()).uid);
+      camera_msg->header.stamp = stamp;
+      camera_msg->height = detections->image_height;
+      camera_msg->width = detections->image_width;
+      camera_pub_->publish(std::move(camera_msg));
+    }
+
+    auto viz_msg = std::make_unique<visualization_msgs::msg::MarkerArray>();
+    solver_.appendArucoMarkers(viz_msg->markers, stamp);
+    viz_pub_->publish(std::move(viz_msg));
   }
 
   rclcpp::CallbackGroup::SharedPtr callback_group_;
   rclcpp::Subscription<ar_slam_interfaces::msg::Detections>::SharedPtr subscription_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr viz_pub_;
 
   ArSlamSolver solver_;
 

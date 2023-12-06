@@ -29,6 +29,7 @@ SOFTWARE.
 #include "rclcpp/rclcpp.hpp"
 
 // ROS2 Interfaces
+#include "ar_slam_interfaces/msg/capture.hpp"
 #include "ar_slam_interfaces/msg/detections.hpp"
 
 // Components
@@ -45,148 +46,205 @@ public:
   {
     {
       rcl_interfaces::msg::ParameterDescriptor desc{};
-      desc.name = "expected_detectors";
+      desc.name = "expected_detector_types";
       desc.read_only = true;
       desc.description =
         "detectors names to expect before when merging messages, if empty messages is immediately passed through";
-      std::vector<std::string> default_detectors = {"4X4_50", "5X5_100"};
-      std::vector<std::string> detectors = this->declare_parameter(
-        desc.name, default_detectors,
+      std::vector<std::string> default_detector_types = {"4X4_50", "5X5_100"};
+      std::vector<std::string> detector_types = this->declare_parameter(
+        desc.name, default_detector_types,
         desc);
 
       // Convert vector into set
       std::copy(
-        detectors.begin(), detectors.end(),
-        std::inserter(expected_detectors_, expected_detectors_.end()));
+        detector_types.begin(), detector_types.end(),
+        std::inserter(expected_detector_types_, expected_detector_types_.end()));
+    }
+
+    {
+      rcl_interfaces::msg::ParameterDescriptor desc{};
+      desc.name = "include_image";
+      desc.read_only = true;
+      bool default_include_image = true;
+      desc.description =
+        "If true, top-level capture image will be included in merged detections";
+      include_image_ = this->declare_parameter(
+        desc.name, default_include_image, desc);
     }
 
     callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    publisher_ =
+      this->create_publisher<ar_slam_interfaces::msg::Detections>("merged_detections", 10);
 
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
     rclcpp::QoS qos(10);
     using std::placeholders::_1;
-    subscription_ = this->create_subscription<ar_slam_interfaces::msg::Detections>(
-      "detections", qos, std::bind(&MergeDetections::detection_callback, this, _1), sub_options);
+    detection_sub_ = this->create_subscription<ar_slam_interfaces::msg::Detections>(
+      "detections", qos, std::bind(&MergeDetections::detectionCallback, this, _1), sub_options);
 
-    publisher_ =
-      this->create_publisher<ar_slam_interfaces::msg::Detections>("merged_detections", 10);
+    if (include_image_) {
+      capture_sub_ = this->create_subscription<ar_slam_interfaces::msg::Capture>(
+        "captures", qos, std::bind(&MergeDetections::captureCallback, this, _1), sub_options);
+    }
   }
 
 protected:
-  void detection_callback(ar_slam_interfaces::msg::Detections::UniquePtr detections)
+  struct MergedDetections;
+
+  MergedDetections * findOrAdd(const std::string & capture_uid)
   {
-    // find matching  in merge_queue_
+    // find matching uid in merge_queue_
     auto itr = std::find_if(
       merge_queue_.begin(), merge_queue_.end(),
       [&](const MergedDetections & merged)
       {
-        return merged.get_id() == detections->capture_uid;
+        return merged.getId() == capture_uid;
       });
 
     if (itr == merge_queue_.end()) {
-      merge_queue_.emplace_back(std::move(detections));
-      itr = merge_queue_.end() - 1;
+      merge_queue_.emplace_back(capture_uid);
+      return &merge_queue_.back();
+    } else if (itr->isPublished()) {
+      RCLCPP_WARN_STREAM(
+        get_logger(), "Got more dections for "
+          << capture_uid << " after result was published");
+      return nullptr;
     } else {
-      if (!itr->add(std::move(detections))) {
-        // This might happend if there are more detectors running that list in expected set
-        RCLCPP_WARN_STREAM(
-          get_logger(), "Got more dections for "
-            << detections->capture_uid << " after result was published");
-      }
+      return &(*itr);
+    }
+  }
+
+  void postCallback(MergedDetections * merged)
+  {
+    if (merged->hasAll(expected_detector_types_, include_image_)) {
+      RCLCPP_INFO_STREAM(get_logger(), "Publishing merged detections for " << merged->getId());
+      publisher_->publish(merged->publish());
     }
 
-    if (itr->has_all(expected_detectors_)) {
-      RCLCPP_INFO_STREAM(get_logger(), "Publishing merged detections for " << itr->get_id());
-      publisher_->publish(itr->publish());
-    }
-
-    while (merge_queue_.size() > 1) {
+    // TODO parameterize merge queue size
+    while (merge_queue_.size() > 2) {
       auto & front = merge_queue_.front();
-      if (!front.is_published()) {
+      if (!front.isPublished()) {
         std::ostringstream ss;
-        for (const auto & detector : front.get_detectors()) {
+        for (const auto & detector : front.getDetectorTypes()) {
           ss << ' ' << detector;
         }
         RCLCPP_WARN_STREAM(
-          get_logger(), "Dropping incomplete merge for " << front.get_id()
+          get_logger(), "Dropping incomplete merge for " << front.getId()
                                                          << " with" << ss.str());
       }
       merge_queue_.pop_front();
     }
   }
 
+  void detectionCallback(ar_slam_interfaces::msg::Detections::UniquePtr detections)
+  {
+    MergedDetections * merged = findOrAdd(detections->capture_uid);
+    if (merged != nullptr) {
+      merged->add(std::move(detections));
+      postCallback(merged);
+    }
+  }
+
+  void captureCallback(ar_slam_interfaces::msg::Capture::ConstSharedPtr capture)
+  {
+    MergedDetections * merged = findOrAdd(capture->capture_uid);
+    if (merged != nullptr) {
+      merged->add(capture);
+      postCallback(merged);
+    }
+  }
+
   struct MergedDetections
   {
-    MergedDetections(ar_slam_interfaces::msg::Detections::UniquePtr detections)
-    : capture_uid_{detections->capture_uid},
-      merged_detections_{std::move(detections)}
+    MergedDetections(std::string capture_uid)
+    : capture_uid_{std::move(capture_uid)}
     {
-      std::move(
-        merged_detections_->detectors.begin(),
-        merged_detections_->detectors.end(),
-        std::inserter(detectors_, detectors_.end()));
     }
 
-    bool add(ar_slam_interfaces::msg::Detections::UniquePtr detections)
+    void add(ar_slam_interfaces::msg::Detections::UniquePtr detections)
     {
-      if (is_published()) {
-        return false;
+      if (static_cast<bool>(merged_detections_)) {
+        // steal detections and detector_types types from incoming message
+        std::move(
+          detections->detections.begin(),
+          detections->detections.end(),
+          std::back_inserter(merged_detections_->detections));
+        std::move(
+          detections->detector_types.begin(),
+          detections->detector_types.end(),
+          std::inserter(detector_types_, detector_types_.end()));
+      } else {
+        // steal entire message
+        merged_detections_ = std::move(detections);
+        // steal detections from internal message
+        std::move(
+          merged_detections_->detector_types.begin(),
+          merged_detections_->detector_types.end(),
+          std::inserter(detector_types_, detector_types_.end()));
       }
-      std::move(
-        detections->detectors.begin(),
-        detections->detectors.end(),
-        std::inserter(detectors_, detectors_.end()));
-      std::move(
-        detections->detections.begin(),
-        detections->detections.end(),
-        std::back_inserter(merged_detections_->detections));
-      return true;
     }
 
-    bool is_published() const
+    void add(ar_slam_interfaces::msg::Capture::ConstSharedPtr capture)
     {
-      return !static_cast<bool>(merged_detections_);
+      capture_ = std::move(capture);
+    }
+
+    bool isPublished() const
+    {
+      return is_published_;
     }
 
     ar_slam_interfaces::msg::Detections::UniquePtr publish()
     {
       std::move(
-        detectors_.begin(), detectors_.end(),
-        std::back_inserter(merged_detections_->detectors));
+        detector_types_.begin(), detector_types_.end(),
+        std::back_inserter(merged_detections_->detector_types));
+      if (static_cast<bool>(capture_)) {
+        merged_detections_->image = capture_->image;
+      }
+      is_published_ = true;
       return std::move(merged_detections_);
     }
 
-    bool has_all(const std::set<std::string> & expected_detectors)
+    bool hasAll(const std::set<std::string> & expected_detector_types, bool include_image)
     {
+      if (include_image and !static_cast<bool>(capture_)) {
+        return false;
+      }
       return std::includes(
-        detectors_.begin(), detectors_.end(),
-        expected_detectors.begin(), expected_detectors.end());
+        detector_types_.begin(), detector_types_.end(),
+        expected_detector_types.begin(), expected_detector_types.end());
     }
 
-    const std::string & get_id() const
+    const std::string & getId() const
     {
       return capture_uid_;
     }
 
-    const std::set<std::string> & get_detectors() const
+    const std::set<std::string> & getDetectorTypes() const
     {
-      return detectors_;
+      return detector_types_;
     }
 
 protected:
     const std::string capture_uid_;
-    std::set<std::string> detectors_;
+    std::set<std::string> detector_types_;
+    bool is_published_ = false;
     ar_slam_interfaces::msg::Detections::UniquePtr merged_detections_;
+    ar_slam_interfaces::msg::Capture::ConstSharedPtr capture_;
   };
 
   std::deque<MergedDetections> merge_queue_;
 
   rclcpp::CallbackGroup::SharedPtr callback_group_;
-  rclcpp::Subscription<ar_slam_interfaces::msg::Detections>::SharedPtr subscription_;
+  rclcpp::Subscription<ar_slam_interfaces::msg::Detections>::SharedPtr detection_sub_;
+  rclcpp::Subscription<ar_slam_interfaces::msg::Capture>::SharedPtr capture_sub_;
   rclcpp::Publisher<ar_slam_interfaces::msg::Detections>::SharedPtr publisher_;
 
-  std::set<std::string> expected_detectors_;
+  std::set<std::string> expected_detector_types_;
+  bool include_image_ = true;
 };
 
 }  // namespace ar_slam

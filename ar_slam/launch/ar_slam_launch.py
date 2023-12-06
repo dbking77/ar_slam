@@ -79,7 +79,6 @@ def generate_launch_description():
         parameters=[{
             # 'aruco_dict': '5X5_100',
             'aruco_dict': '4X4_50',
-            'id_offset': 0,
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
@@ -91,7 +90,6 @@ def generate_launch_description():
         parameters=[{
             'aruco_dict': '5X5_100',
             # 'aruco_dict': '4X4_50',
-            'id_offset': 1000,
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
@@ -101,10 +99,11 @@ def generate_launch_description():
         plugin='ar_slam::MergeDetections',
         name='merge_detections',
         parameters=[{
-            'expected_detectors': [
+            'expected_detector_types': [
                 'aruco_4X4_50',
                 'aruco_5X5_100',
-            ]
+            ],
+            'include_image': True,
         }],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
